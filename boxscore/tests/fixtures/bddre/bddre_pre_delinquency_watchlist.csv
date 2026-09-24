@@ -1,0 +1,3 @@
+unit,resident_code,resident_name,predictive_risk_score,predictive_risk_tier,tenure_cohort,payment_cohort,renewal_pressure,actual_rent
+R02105,t0259240,Resident Three,56.6,Medium,Early (3-12mo),Frequent Late,Moderate Pressure,1224.0
+C00114,t0261959,Resident Four,71.2,High,Early (3-12mo),Frequent Late,Below Market,1106.0

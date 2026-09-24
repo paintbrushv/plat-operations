@@ -1,0 +1,4 @@
+unit,unit_type,sqft,resident,name,market,charge_rent,property_id,snapshot_date
+C101,1x1,725,Resident D,Resident D,1250,1200,p102,2026-06-09
+C102,1x1,725,Resident E,Resident E,1250,1210,p102,2026-06-09
+C103,1x1,725,DOWN,,1250,0,p102,2026-06-09

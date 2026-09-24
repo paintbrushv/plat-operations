@@ -1,0 +1,11 @@
+.env
+data/private/
+reports/private/
+*.db
+*.db-shm
+*.db-wal
+target/
+# Config-driven lane registry: written by `boxscore onboard` for a prospect's
+# property. Kept local so onboarding a GP's data never lands in the repo. When
+# absent, the harness falls back to the built-in maplewood/juniper_fund/willow-brook lanes.
+lanes.json

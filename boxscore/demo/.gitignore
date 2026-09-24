@@ -1,0 +1,4 @@
+# Generated demo artifacts — reproducible via seed.sh, not committed.
+demo.db
+demo.db-*
+data/

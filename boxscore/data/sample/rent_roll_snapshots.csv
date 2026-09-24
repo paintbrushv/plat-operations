@@ -1,0 +1,6 @@
+property,as_of_date,occupied_units,vacant_units,leased_units,notice_units,down_units,market_rent_total,in_place_rent_total
+Oak Ridge,2026-03-31,156,12,159,7,2,229600,218400
+Oak Ridge,2026-04-30,154,14,157,8,3,231200,216500
+Oak Ridge,2026-05-31,153,15,155,11,4,232000,211700
+Riverbend,2026-05-31,202,10,205,6,1,289000,2200102
+Pine Hollow,2026-05-31,92,4,93,3,0,126000,121400

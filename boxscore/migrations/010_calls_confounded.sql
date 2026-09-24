@@ -1,0 +1,14 @@
+-- Migration 010: add `confounded` flag to calls.
+--
+-- A prediction call (e.g. delinquency_risk) whose outcome was changed by an
+-- intervention the operator took is "confounded". Scoring it on the raw outcome
+-- would punish a successful intervention (a mitigated risk reads as a MISS) and
+-- teach the harness to stop flagging risks it successfully mitigates.
+--
+-- This migration adds the column and the exclusion plumbing only. Nothing sets
+-- confounded = 1 yet. The treatment-detector that sets it lands with the
+-- decision-capture work (see the K2 fix in the decision-outcome-flywheel spec).
+-- Default 0 means zero behavior change until that detector exists.
+-- NOTE: the migration runner splits statements on the semicolon character, so a
+-- migration comment must never contain one.
+ALTER TABLE calls ADD COLUMN confounded INTEGER NOT NULL DEFAULT 0;

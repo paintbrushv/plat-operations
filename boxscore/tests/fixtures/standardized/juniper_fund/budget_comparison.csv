@@ -1,0 +1,4 @@
+account_code,description,ptd_actual,ptd_budget,period,property_id
+4000,Apartment Rent,45000,44000,Jun 2026,200101
+4100,Laundry Income,1200,1000,Jun 2026,200101
+5100,Payroll,-8000,-7800,Jun 2026,200101

@@ -1,0 +1,3 @@
+unit,unit_type,property_id,property_name,sqft,resident,name,market,charge_rent,snapshot_date
+B101,2x1,200101,juniper_fund,850,Resident C,Resident C,1100,1050,2026-06-09
+B102,2x1,200101,juniper_fund,850,,,1100,0,2026-06-09

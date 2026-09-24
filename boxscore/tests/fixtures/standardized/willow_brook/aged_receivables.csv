@@ -1,0 +1,3 @@
+property_id,resident_code,resident_name,resident_status,current_owed,days_0_30,days_31_60,days_61_90,days_over_90,prepayments,total_owed,snapshot_date,total_delinquent
+p102,R-D,Resident D,current,0,0,0,0,0,0,0,2026-06-09,0
+p102,R-E,Resident E,current,0,60,0,0,0,-10,60,2026-06-09,60

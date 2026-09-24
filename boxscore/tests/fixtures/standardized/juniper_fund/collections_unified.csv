@@ -1,0 +1,2 @@
+property_id,unit,resident_code,resident_name,total_opportunity,delinquency_tier,total_delinquent,days_31_60,days_61_90,days_over_90,exception_count,missed_fee_total,underpricing_gap_monthly,pricing_opportunity,pre_delinquency_score,pre_delinquency_tier,payment_cohort,on_time_pct,days_0_30,intervention_priority,confidence,missed_fee_monthly_runrate,snapshot_date
+200101,B101,R-C,Resident C,250,medium,50,25,0,0,0,10,75,75,55,watch,mixed,0.80,25,2,0.85,10,2026-06-09

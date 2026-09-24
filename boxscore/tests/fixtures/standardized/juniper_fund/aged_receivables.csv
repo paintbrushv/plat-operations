@@ -1,0 +1,2 @@
+property_id,property_name,unit,resident_code,resident_name,resident_status,current_owed,days_0_30,days_31_60,days_61_90,days_over_90,prepayments,total_owed,snapshot_date
+200101,juniper_fund,B101,R-C,Resident C,current,0,25,25,0,0,0,50,2026-06-09

@@ -1,0 +1,12 @@
+ALTER TABLE calls ADD COLUMN decision_kind TEXT;
+ALTER TABLE calls ADD COLUMN entities_json TEXT;
+ALTER TABLE calls ADD COLUMN outcome_mode TEXT;
+ALTER TABLE calls ADD COLUMN value_class TEXT;
+ALTER TABLE calls ADD COLUMN acted_on INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE calls ADD COLUMN accepted_recall INTEGER;
+ALTER TABLE calls ADD COLUMN source_surface TEXT;
+ALTER TABLE calls ADD COLUMN context_json TEXT;
+ALTER TABLE calls ADD COLUMN operator_outcome TEXT;
+ALTER TABLE calls ADD COLUMN resolved_by TEXT;
+ALTER TABLE calls ADD COLUMN self_graded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE calls ADD COLUMN regime_tag TEXT;

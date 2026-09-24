@@ -1,0 +1,56 @@
+name: boxscore-ci
+
+# Gates the Boxscore Rust harness on every push/PR: format, lint (warnings as
+# errors), and the full test suite. The crate lives in boxscore/, so all cargo
+# steps run from there. See AGENTS.md / docs/BOXSCORE_ENGINEERING.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'boxscore/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'boxscore/**'
+      - '.github/workflows/ci.yml'
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: check · clippy · test · fmt
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: boxscore
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + clippy + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: boxscore
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Doc tests
+        run: cargo test --doc

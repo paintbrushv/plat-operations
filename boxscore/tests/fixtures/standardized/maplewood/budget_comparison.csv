@@ -1,0 +1,6 @@
+account_code,description,ptd_actual,ptd_budget,period,property_id
+4000,Apartment Rent,95000,100000,Jun 2026,p101
+4990,Concessions,-3500,-2500,Jun 2026,p101
+5200,Repairs & Maintenance,-14000,-9000,Jun 2026,p101
+9999,Mystery Clearing,-250,-100,Jun 2026,p101
+6000,Bad Number,not-a-number,-50,Jun 2026,p101
