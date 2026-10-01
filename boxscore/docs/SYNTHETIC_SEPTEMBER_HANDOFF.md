@@ -23,9 +23,12 @@ The synthetic close requires both feeds and rejects GL actuals for the period
 that did not come from accepted adapter revisions.
 
 The `pms_synthetic_closes` table freezes the September actual and budget NOI
-at issue. A later correction changes the current view and Boxscore variance
-analysis but leaves the issued values unchanged. This snapshot is a rehearsal
-artifact, not an owner-approved close or a general as-issued report service.
+at issue. Sealing now requires the task-run ID of a completed variance report
+for the same property, period, and totals. Boxscore stores that report's body
+in SQLite and creates a unique file that subsequent analyses do not replace.
+A later correction changes the current view and produces a separate report,
+while the issued report and close values remain unchanged. This snapshot is a
+rehearsal artifact, not an owner-approved close.
 
 | Property | Invented issued NOI | Invented restated NOI | Invented budget NOI |
 |---|---:|---:|---:|
@@ -44,8 +47,9 @@ namespaces and account maps.
 Run `cargo test --test synthetic_pms_handoff` from `boxscore/`. The tests cover
 both handoffs, budget/NOI totals, the frozen close, correction and retries,
 changed boundary refusal, unknown layout/account/date/revision refusal,
-transaction rollback, file-backed SQLite sealing, and rejection of a negative-expense budget sign.
-It also rejects unattributed actuals before sealing.
+transaction rollback, file-backed SQLite sealing, issued-report history,
+stale or tampered report refusal, and rejection of a negative-expense budget
+sign. It also rejects unattributed actuals before sealing.
 
 A protected local run used a fresh SQLite backup of
 `/home/ubuntu/projects/plat-operations/boxscore/data/boxscore_demo.db`. The
@@ -55,23 +59,24 @@ The original demo contained only March–May 2026 financial periods and three
 properties. The working copy added two named synthetic September properties;
 Boxscore's CLI imported the invented feeds and budget, sealed each snapshot,
 ran variance analysis before and after TC's revision, then reopened a SQLite
-backup. The private final run summary lives outside the repository at
-`/tmp/boxscore-september-demo-20261001/v6/summary.json` and must not be published with its
-database files.
+backup. The current private run summary lives outside the repository at
+`/tmp/boxscore-september-demo-20261001/v8-report/summary.json` and must not be
+published with its database files. This run verified separate issued and
+restated report paths, an unchanged issued report, and a matching restored
+status.
 
 ## Still open
 
 - September close-readiness marks both synthetic properties **not owner-ready**
   with data contracts `NOT_RUN`; operational feeds and genuine close approvals
   are absent. The synthetic seal deliberately does not grant owner readiness.
-- The existing variance command reuses its Markdown report path on each run.
-  The local rehearsal copied the issued report before restatement, but Boxscore
-  still needs immutable issued-report storage and current-grant checks.
-- The older demo CSV uses negative expense amounts, while the current Boxscore
-  variance bridge expects positive expense costs. The new synthetic adapter
-  normalizes debit/credit into that current convention and refuses a negative
-  expense total before sealing. Earlier demo NOI observations should not be
-  treated as accounting parity until their sign convention is reconciled.
+- Current host-owned grant checks remain unavailable. A report's stored
+  history does not establish that a requester's current workspace/deal grants
+  allow them to read it.
+- The older demo database still contains negative expense rows from the prior
+  public sample. The source sample has been corrected, and variance analysis
+  now refuses net-negative expense totals, but the old database itself was not
+  modified. See [report and sign controls](ISSUED_REPORTS_AND_SIGN_CONVENTION.md).
 - Approved before/after Yardi and ResMan TBs, income statements, budgets,
   detailed GLs, subledgers, correction log, stable identity map, actual export
   layouts, and host-owned grants remain unavailable. Production adapters and

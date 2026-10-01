@@ -194,6 +194,21 @@ pub async fn analyze_variance(
 
         let account_variances = compute_account_variances(&actuals, &budgets);
         let noi_bridge = compute_noi_bridge(&account_variances);
+        if noi_bridge.actual_expenses < 0.0 || noi_bridge.budget_expenses < 0.0 {
+            db::insert_gap(
+                pool,
+                &task_run_id,
+                "expense_sign_anomaly",
+                "high",
+                "Total expenses are negative; the GL sign convention conflicts with Boxscore's positive-cost NOI bridge.",
+                "Publishing a variance with flipped expense signs would misstate NOI.",
+                "Reconcile the source sign convention in a versioned adapter and re-run the analysis.",
+            )
+            .await?;
+            return Err(anyhow!(
+                "negative expense total; reconcile the GL sign convention before variance analysis"
+            ));
+        }
         let top_positive_drivers = top_drivers(&account_variances, true);
         let top_negative_drivers = top_drivers(&account_variances, false);
         tools::log_tool_run(
@@ -253,7 +268,7 @@ pub async fn analyze_variance(
             .first()
             .map(noi_impact)
             .unwrap_or_default();
-        let mut gaps = GapEngine::detect(&GapContext {
+        let gaps = GapEngine::detect(&GapContext {
             actual_count: actuals.len(),
             budget_count: budgets.len(),
             has_rent_roll: rent_roll.is_some(),
@@ -265,18 +280,6 @@ pub async fn analyze_variance(
             largest_unexplained_variance,
             confidence_score,
         });
-        // Guard the sign convention: total OpEx should never be negative.
-        // A negative total means the source flipped expense signs, which
-        // would silently corrupt NOI without this warning.
-        if noi_bridge.actual_expenses < 0.0 || noi_bridge.budget_expenses < 0.0 {
-            gaps.push(GapProposal {
-                gap_type: "expense_sign_anomaly".to_string(),
-                severity: "high".to_string(),
-                description: "Total expenses for this period are negative, which suggests the GL source stores expenses with a flipped sign convention (expected: positive costs).".to_string(),
-                why_it_matters: "NOI is computed as revenue minus expenses; a flipped expense sign convention overstates or understates NOI with no other warning.".to_string(),
-                proposed_resolution: "Inspect the GL source sign convention and correct the ingest adapter before publishing owner-ready variance.".to_string(),
-            });
-        }
         for gap in &gaps {
             db::insert_gap(
                 pool,
@@ -382,7 +385,14 @@ pub async fn analyze_variance(
             report_path: None,
         };
 
-        let report_path = reports::write_variance_report(report_dir, &analysis)?;
+        let report_path = reports::issue_variance_report(
+            pool,
+            &property.id,
+            &period.id,
+            report_dir,
+            &analysis,
+        )
+        .await?;
         analysis.report_path = Some(report_path.to_string_lossy().to_string());
         tools::log_tool_run(
             pool,

@@ -53,6 +53,10 @@ The portfolio demo ingests the built-in standardized property lanes, including G
 
 The isolated [synthetic September handoff rehearsal](docs/SYNTHETIC_SEPTEMBER_HANDOFF.md) exercises versioned invented PMS layouts and a frozen correction snapshot. It does not close a real property period.
 
+[Variance report history and demo expense signs](docs/ISSUED_REPORTS_AND_SIGN_CONVENTION.md) explains the unique issued reports, the synthetic close report link, and the corrected public sample expense convention.
+
+The [September 2026 source intake](docs/SEPTEMBER_2026_SOURCE_INTAKE.md) lists the approved export and grant evidence needed before real TC or CCAR adapters can be validated.
+
 Run a close-readiness view for a selected period:
 
 ```bash
