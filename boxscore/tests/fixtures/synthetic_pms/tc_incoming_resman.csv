@@ -1,0 +1,4 @@
+property_code,accounting_month,effective_date,transaction_id,revision_no,gl_account,description,debit_amount,credit_amount
+SYN-TC,2026-09,2026-09-23,TX-001,1,R-100,Rental Income,0.00,20000.00
+SYN-TC,2026-09,2026-09-25,TX-002,1,E-200,Repairs and Maintenance,7000.00,0.00
+SYN-TC,2026-09,2026-09-23,TX-003,1,O-300,Other Income,0.00,5000.00

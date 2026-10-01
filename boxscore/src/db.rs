@@ -69,6 +69,10 @@ pub async fn init_database(pool: &SqlitePool) -> Result<()> {
         ),
         ("012", include_str!("../migrations/012_turn_costs.sql")),
         ("013", include_str!("../migrations/013_unit_pnl.sql")),
+        (
+            "014",
+            include_str!("../migrations/014_synthetic_pms_handoff.sql"),
+        ),
     ] {
         let applied = sqlx::query("SELECT version FROM schema_migrations WHERE version = ?")
             .bind(version)

@@ -1,0 +1,3 @@
+property_id,period,posting_date,entry_id,revision,account_code,account_name,debit,credit
+SYN-CCAR,2026-09,2026-09-20,TX-001,1,4000,Rental Income,0.00,60000.00
+SYN-CCAR,2026-09,2026-09-24,TX-002,1,5200,Repairs and Maintenance,25000.00,0.00
