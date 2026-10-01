@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Existing summarize trait (keep untouched) ─────────────────────────────────
 
+#[allow(clippy::double_must_use)] // async_trait adds must_use to an already must_use Future.
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -81,6 +82,7 @@ pub struct ChatMessage {
     pub content: serde_json::Value,
 }
 
+#[allow(clippy::double_must_use)] // async_trait adds must_use to an already must_use Future.
 #[async_trait]
 pub trait ToolUseProvider: Send + Sync {
     fn model(&self) -> &str;

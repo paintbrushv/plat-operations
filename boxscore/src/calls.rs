@@ -160,6 +160,7 @@ pub struct Scored {
 
 /// A domain scorer. Returns `Ok(None)` when the outcome data for the call's
 /// `mature_by` period is not yet available/fresh (the call stays `open`).
+#[allow(clippy::double_must_use)] // async_trait adds must_use to an already must_use Future.
 #[async_trait]
 pub trait Scorer {
     async fn score(&self, pool: &SqlitePool, call: &Call) -> Result<Option<Scored>>;

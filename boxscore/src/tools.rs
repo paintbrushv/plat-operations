@@ -28,6 +28,7 @@ pub struct ToolDefinition {
     pub data_access_level: DataAccessLevel,
 }
 
+#[allow(clippy::double_must_use)] // async_trait adds must_use to an already must_use Future.
 #[async_trait]
 pub trait Tool {
     fn definition(&self) -> ToolDefinition;
