@@ -1,0 +1,17 @@
+{
+  "schema_version": "boxscore.synthetic-pms-handoff/1",
+  "property_name": "Synthetic CCAR September",
+  "external_property_id": "SYN-CCAR",
+  "period": "2026-09",
+  "cutover_on": "2026-09-25",
+  "before": {
+    "profile_version": "yardi.synthetic-gl/1",
+    "source_namespace": "synthetic/ccar/yardi/outgoing",
+    "account_categories": {"4000": "Rental Income", "5200": "Repairs & Maintenance"}
+  },
+  "after": {
+    "profile_version": "yardi.synthetic-gl/1",
+    "source_namespace": "synthetic/ccar/yardi/incoming",
+    "account_categories": {"4100": "Rental Income", "5300": "Repairs & Maintenance"}
+  }
+}

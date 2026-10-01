@@ -25,6 +25,7 @@ pub mod property_model;
 pub mod questions;
 pub mod recall;
 pub mod reports;
+pub mod synthetic_pms;
 pub mod t12;
 pub mod tools;
 pub mod tui;

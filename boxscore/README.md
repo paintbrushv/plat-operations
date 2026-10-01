@@ -51,6 +51,8 @@ cd boxscore
 
 The portfolio demo ingests the built-in standardized property lanes, including GL, operating snapshots, and collections context. It runs one variance report per property for the latest period with both actuals and budgets, and writes an asset-manager review index under `reports/generated/portfolio-demo/portfolio-demo-index.md`.
 
+The isolated [synthetic September handoff rehearsal](docs/SYNTHETIC_SEPTEMBER_HANDOFF.md) exercises versioned invented PMS layouts and a frozen correction snapshot. It does not close a real property period.
+
 Run a close-readiness view for a selected period:
 
 ```bash

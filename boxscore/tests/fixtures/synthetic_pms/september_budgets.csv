@@ -1,0 +1,6 @@
+property,period,account_code,account_name,category,amount
+Synthetic TC September,2026-09,4000,Rental Income,Rental Income,70000.00
+Synthetic TC September,2026-09,4300,Other Income,Other Income,10000.00
+Synthetic TC September,2026-09,5200,Repairs and Maintenance,Repairs & Maintenance,23000.00
+Synthetic CCAR September,2026-09,4000,Rental Income,Rental Income,75000.00
+Synthetic CCAR September,2026-09,5200,Repairs and Maintenance,Repairs & Maintenance,29000.00

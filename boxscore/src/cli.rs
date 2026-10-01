@@ -21,7 +21,7 @@ use crate::{
     },
     db, evolution,
     ingest::{self, IngestKind},
-    intake, portfolio_demo, questions, t12,
+    intake, portfolio_demo, questions, synthetic_pms, t12,
     variance::{self, VarianceRequest},
 };
 
@@ -83,6 +83,11 @@ enum Command {
     CloseReadiness {
         #[arg(long)]
         period: String,
+    },
+    /// Synthetic-only manager handoff rehearsal; never imports real PMS exports.
+    SyntheticPms {
+        #[command(subcommand)]
+        command: SyntheticPmsCommand,
     },
     /// Persist a finding from the standing agentic report-review into the learning loop.
     ///
@@ -178,6 +183,28 @@ enum Command {
         /// Total unit count hint for the property.
         #[arg(long)]
         units: Option<u32>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SyntheticPmsCommand {
+    Import {
+        #[arg(long)]
+        boundary: PathBuf,
+        #[arg(long)]
+        side: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Seal {
+        #[arg(long)]
+        boundary: PathBuf,
+    },
+    Status {
+        #[arg(long)]
+        property: String,
+        #[arg(long)]
+        period: String,
     },
 }
 
@@ -754,6 +781,32 @@ pub async fn run(config: AppConfig) -> Result<()> {
                         close_readiness::assess_close_readiness(&pool, &period, &config.report_dir)
                             .await?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
+                    Ok(())
+                }
+                Command::SyntheticPms { command } => {
+                    match command {
+                        SyntheticPmsCommand::Import {
+                            boundary,
+                            side,
+                            file,
+                        } => {
+                            let boundary = synthetic_pms::HandoffBoundary::from_path(&boundary)?;
+                            let summary =
+                                synthetic_pms::import_file(&pool, &boundary, &side, &file).await?;
+                            println!("{}", serde_json::to_string_pretty(&summary)?);
+                        }
+                        SyntheticPmsCommand::Seal { boundary } => {
+                            let boundary = synthetic_pms::HandoffBoundary::from_path(&boundary)?;
+                            let close =
+                                synthetic_pms::seal_synthetic_close(&pool, &boundary).await?;
+                            println!("{}", serde_json::to_string_pretty(&close)?);
+                        }
+                        SyntheticPmsCommand::Status { property, period } => {
+                            let close =
+                                synthetic_pms::synthetic_close(&pool, &property, &period).await?;
+                            println!("{}", serde_json::to_string_pretty(&close)?);
+                        }
+                    }
                     Ok(())
                 }
                 Command::RecordFinding {
