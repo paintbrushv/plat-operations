@@ -81,10 +81,41 @@ async fn sealed_september_close_keeps_issued_noi_after_late_outgoing_correction(
     assert_eq!(issued_variance.noi_bridge.actual_expenses, 25_000.0);
     assert_eq!(issued_variance.noi_bridge.actual_noi, 55_000.0);
     assert_eq!(issued_variance.noi_bridge.budget_noi, 57_000.0);
-    let tc_close = synthetic_pms::seal_synthetic_close(&pool, &tc)
+    let issued_path = issued_variance.report_path.as_ref().unwrap();
+    let issued_markdown = fs::read_to_string(issued_path).unwrap();
+    let tc_id = db::require_property_by_name(&pool, &tc.property_name)
+        .await
+        .unwrap()
+        .id;
+    let tc_period_id = db::period_by_label(&pool, &tc.period)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    assert!(boxscore::reports::issue_variance_report(
+        &pool,
+        &tc_id,
+        &tc_period_id,
+        reports.path(),
+        &issued_variance,
+    )
+    .await
+    .is_err());
+    assert_eq!(fs::read_to_string(issued_path).unwrap(), issued_markdown);
+    let ccar_variance = variance::analyze_variance(
+        &pool,
+        VarianceRequest {
+            property: ccar.property_name.clone(),
+            period: ccar.period.clone(),
+        },
+        reports.path(),
+    )
+    .await
+    .unwrap();
+    let tc_close = synthetic_pms::seal_synthetic_close(&pool, &tc, &issued_variance.task_run_id)
         .await
         .unwrap();
-    let ccar_close = synthetic_pms::seal_synthetic_close(&pool, &ccar)
+    let ccar_close = synthetic_pms::seal_synthetic_close(&pool, &ccar, &ccar_variance.task_run_id)
         .await
         .unwrap();
     assert_eq!(
@@ -102,10 +133,16 @@ async fn sealed_september_close_keeps_issued_noi_after_late_outgoing_correction(
         (4_400_000, 4_600_000)
     );
     assert_eq!(tc_close.accepted_revision_count_at_issue, 6);
+    assert_eq!(
+        tc_close.issued_report_task_run_id.as_deref(),
+        Some(issued_variance.task_run_id.as_str())
+    );
     assert!(tc_close.synthetic_only);
-    assert!(synthetic_pms::seal_synthetic_close(&pool, &tc)
-        .await
-        .is_err());
+    assert!(
+        synthetic_pms::seal_synthetic_close(&pool, &tc, &issued_variance.task_run_id)
+            .await
+            .is_err()
+    );
 
     let repeat =
         synthetic_pms::import_file(&pool, &tc, "after", &fixture("tc_incoming_resman.csv"))
@@ -151,6 +188,21 @@ async fn sealed_september_close_keeps_issued_noi_after_late_outgoing_correction(
     assert_eq!(restated_variance.noi_bridge.actual_expenses, 25_500.0);
     assert_eq!(restated_variance.noi_bridge.actual_noi, 54_500.0);
     assert_eq!(restated_variance.noi_bridge.budget_noi, 57_000.0);
+    assert_ne!(issued_variance.report_path, restated_variance.report_path);
+    assert_eq!(fs::read_to_string(issued_path).unwrap(), issued_markdown);
+    let stored_report: (String,) = sqlx::query_as(
+        "SELECT report_markdown FROM variance_report_artifacts WHERE task_run_id = ?",
+    )
+    .bind(&issued_variance.task_run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_report.0, issued_markdown);
+    assert!(
+        synthetic_pms::seal_synthetic_close(&pool, &tc, &restated_variance.task_run_id)
+            .await
+            .is_err()
+    );
     let other = synthetic_pms::synthetic_close(&pool, &ccar.property_name, &ccar.period)
         .await
         .unwrap();
@@ -159,10 +211,6 @@ async fn sealed_september_close_keeps_issued_noi_after_late_outgoing_correction(
         other.current_actual_noi_cents
     );
 
-    let tc_id = db::require_property_by_name(&pool, &tc.property_name)
-        .await
-        .unwrap()
-        .id;
     let equal_receipts: (i64, i64) = sqlx::query_as(
         "SELECT COUNT(*), COUNT(DISTINCT source_namespace) FROM pms_source_revisions \
          WHERE property_id = ? AND source_record_id = 'TX-003' AND amount_cents = 500000",
@@ -312,11 +360,13 @@ async fn synthetic_close_refuses_legacy_negative_expense_budget_sign() {
     ingest::ingest_file(&pool, IngestKind::GlBudgets, &budget)
         .await
         .unwrap();
-    assert!(synthetic_pms::seal_synthetic_close(&pool, &tc)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("negative expense"));
+    assert!(
+        synthetic_pms::seal_synthetic_close(&pool, &tc, "no-valid-report")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("negative expense")
+    );
 }
 
 #[tokio::test]
@@ -356,11 +406,69 @@ async fn synthetic_close_refuses_unattributed_gl_actuals() {
     .execute(&pool)
     .await
     .unwrap();
-    assert!(synthetic_pms::seal_synthetic_close(&pool, &tc)
+    assert!(
+        synthetic_pms::seal_synthetic_close(&pool, &tc, "missing-report")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("outside accepted PMS revisions")
+    );
+}
+
+#[tokio::test]
+async fn seal_requires_current_and_untampered_issued_report() {
+    let pool = setup().await;
+    let tc = HandoffBoundary::from_path(&fixture("tc_boundary.json")).unwrap();
+    synthetic_pms::import_file(&pool, &tc, "before", &fixture("tc_outgoing_yardi.csv"))
+        .await
+        .unwrap();
+    synthetic_pms::import_file(&pool, &tc, "after", &fixture("tc_incoming_resman.csv"))
+        .await
+        .unwrap();
+    ingest::ingest_file(
+        &pool,
+        IngestKind::GlBudgets,
+        &fixture("september_budgets.csv"),
+    )
+    .await
+    .unwrap();
+    assert!(synthetic_pms::seal_synthetic_close(&pool, &tc, "missing")
         .await
         .unwrap_err()
         .to_string()
-        .contains("outside accepted PMS revisions"));
+        .contains("completed variance report"));
+    let reports = tempfile::tempdir().unwrap();
+    let analysis = variance::analyze_variance(
+        &pool,
+        VarianceRequest {
+            property: tc.property_name.clone(),
+            period: tc.period.clone(),
+        },
+        reports.path(),
+    )
+    .await
+    .unwrap();
+    let report_path = analysis.report_path.as_ref().unwrap();
+    let issued_markdown = fs::read_to_string(report_path).unwrap();
+    fs::write(report_path, "tampered").unwrap();
+    assert!(
+        synthetic_pms::seal_synthetic_close(&pool, &tc, &analysis.task_run_id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("differs from stored report")
+    );
+    fs::write(report_path, issued_markdown).unwrap();
+    synthetic_pms::import_file(&pool, &tc, "before", &fixture("tc_outgoing_correction.csv"))
+        .await
+        .unwrap();
+    assert!(
+        synthetic_pms::seal_synthetic_close(&pool, &tc, &analysis.task_run_id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not match current synthetic close totals")
+    );
 }
 
 #[tokio::test]
@@ -385,7 +493,17 @@ async fn file_backed_demo_shape_seals_without_sqlite_lock() {
     )
     .await
     .unwrap();
-    let close = synthetic_pms::seal_synthetic_close(&pool, &tc)
+    let analysis = variance::analyze_variance(
+        &pool,
+        VarianceRequest {
+            property: tc.property_name.clone(),
+            period: tc.period.clone(),
+        },
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    let close = synthetic_pms::seal_synthetic_close(&pool, &tc, &analysis.task_run_id)
         .await
         .unwrap();
     assert_eq!(close.issued_actual_noi_cents, 5_500_000);

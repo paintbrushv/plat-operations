@@ -1,4 +1,4 @@
 account_code,description,ptd_actual,ptd_budget,period,property_id
 4000,Apartment Rent,58000,60000,Jun 2026,p102
 4990,Concessions,-2200,-1500,Jun 2026,p102
-5200,Repairs & Maintenance,-6500,-7000,Jun 2026,p102
+5200,Repairs & Maintenance,6500,7000,Jun 2026,p102

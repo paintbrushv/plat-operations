@@ -148,6 +148,7 @@ pub struct SyntheticClose {
     pub property: String,
     pub period: String,
     pub issued_at: String,
+    pub issued_report_task_run_id: Option<String>,
     pub issued_actual_noi_cents: i64,
     pub issued_budget_noi_cents: i64,
     pub current_actual_noi_cents: i64,
@@ -508,6 +509,7 @@ where
 pub async fn seal_synthetic_close(
     pool: &SqlitePool,
     boundary: &HandoffBoundary,
+    issued_report_task_run_id: &str,
 ) -> Result<SyntheticClose> {
     boundary.validate()?;
     let (year, month) = db::parse_period_label(&boundary.period)?;
@@ -565,6 +567,27 @@ pub async fn seal_synthetic_close(
     }
     let actual = noi_cents(&mut *tx, "gl_actuals", &property.id, &boundary.period).await?;
     let budget = noi_cents(&mut *tx, "gl_budgets", &property.id, &boundary.period).await?;
+    let issued_report = sqlx::query(
+        "SELECT r.actual_noi, r.budget_noi, r.report_path, r.report_markdown FROM variance_report_artifacts r \
+         JOIN task_runs t ON t.id = r.task_run_id \
+         WHERE r.task_run_id = ? AND r.property_id = ? AND r.period_id = ? AND t.status = 'completed'",
+    )
+    .bind(issued_report_task_run_id)
+    .bind(&property.id)
+    .bind(&period.id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| anyhow!("completed variance report for synthetic close is required"))?;
+    let report_path: String = issued_report.get("report_path");
+    let report_markdown: String = issued_report.get("report_markdown");
+    if fs::read_to_string(&report_path)? != report_markdown {
+        bail!("issued variance report file differs from stored report artifact");
+    }
+    if cents_from_real(issued_report.get::<f64, _>("actual_noi"))? != actual
+        || cents_from_real(issued_report.get::<f64, _>("budget_noi"))? != budget
+    {
+        bail!("issued variance report does not match current synthetic close totals");
+    }
     let id = db::new_id();
     sqlx::query(
         "INSERT INTO pms_synthetic_closes (id, property_id, period_id, issued_at, issued_actual_noi_cents, issued_budget_noi_cents, before_namespace, after_namespace, accepted_revision_count) \
@@ -574,6 +597,13 @@ pub async fn seal_synthetic_close(
     .bind(actual).bind(budget).bind(&boundary.before.source_namespace)
     .bind(&boundary.after.source_namespace).bind(counts.iter().sum::<i64>())
     .execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO pms_synthetic_close_reports (close_id, report_task_run_id) VALUES (?, ?)",
+    )
+    .bind(&id)
+    .bind(issued_report_task_run_id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     synthetic_close(pool, &boundary.property_name, &boundary.period).await
 }
@@ -588,8 +618,9 @@ pub async fn synthetic_close(
         bail!("synthetic close requires a synthetic property");
     }
     let row = sqlx::query(
-        "SELECT c.id, c.issued_at, c.issued_actual_noi_cents, c.issued_budget_noi_cents, c.accepted_revision_count \
+        "SELECT c.id, c.issued_at, c.issued_actual_noi_cents, c.issued_budget_noi_cents, c.accepted_revision_count, l.report_task_run_id \
          FROM pms_synthetic_closes c JOIN periods p ON p.id = c.period_id \
+         LEFT JOIN pms_synthetic_close_reports l ON l.close_id = c.id \
          WHERE c.property_id = ? AND p.label = ?",
     ).bind(&property.id).bind(period).fetch_one(pool).await?;
     Ok(SyntheticClose {
@@ -597,6 +628,7 @@ pub async fn synthetic_close(
         property: property_name.to_string(),
         period: period.to_string(),
         issued_at: row.get("issued_at"),
+        issued_report_task_run_id: row.get("report_task_run_id"),
         issued_actual_noi_cents: row.get("issued_actual_noi_cents"),
         issued_budget_noi_cents: row.get("issued_budget_noi_cents"),
         current_actual_noi_cents: noi_cents(pool, "gl_actuals", &property.id, period).await?,

@@ -199,6 +199,8 @@ enum SyntheticPmsCommand {
     Seal {
         #[arg(long)]
         boundary: PathBuf,
+        #[arg(long)]
+        report_task_run_id: String,
     },
     Status {
         #[arg(long)]
@@ -795,10 +797,17 @@ pub async fn run(config: AppConfig) -> Result<()> {
                                 synthetic_pms::import_file(&pool, &boundary, &side, &file).await?;
                             println!("{}", serde_json::to_string_pretty(&summary)?);
                         }
-                        SyntheticPmsCommand::Seal { boundary } => {
+                        SyntheticPmsCommand::Seal {
+                            boundary,
+                            report_task_run_id,
+                        } => {
                             let boundary = synthetic_pms::HandoffBoundary::from_path(&boundary)?;
-                            let close =
-                                synthetic_pms::seal_synthetic_close(&pool, &boundary).await?;
+                            let close = synthetic_pms::seal_synthetic_close(
+                                &pool,
+                                &boundary,
+                                &report_task_run_id,
+                            )
+                            .await?;
                             println!("{}", serde_json::to_string_pretty(&close)?);
                         }
                         SyntheticPmsCommand::Status { property, period } => {

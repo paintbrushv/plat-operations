@@ -1,20 +1,77 @@
 use anyhow::Result;
 use chrono::Utc;
+use sqlx::SqlitePool;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use crate::variance::{noi_impact, AccountVariance, VarianceAnalysisResult};
+use crate::{
+    db,
+    variance::{noi_impact, AccountVariance, VarianceAnalysisResult},
+};
 
-pub fn write_variance_report(
+pub async fn issue_variance_report(
+    pool: &SqlitePool,
+    property_id: &str,
+    period_id: &str,
     report_dir: &Path,
     result: &VarianceAnalysisResult,
 ) -> Result<PathBuf> {
     fs::create_dir_all(report_dir)?;
-    let slug = result.property.to_ascii_lowercase().replace(' ', "-");
-    let path = report_dir.join(format!("{slug}-{}-variance.md", result.period));
-    fs::write(&path, render_variance_report(result))?;
+    let slug: String = result
+        .property
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let path = report_dir.join(format!(
+        "{slug}-{}-{}-variance.md",
+        result.period, result.task_run_id
+    ));
+    let markdown = render_variance_report(result);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&path)?;
+    if let Err(err) = file
+        .write_all(markdown.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(err.into());
+    }
+    drop(file);
+    let path = fs::canonicalize(path)?;
+    let saved = sqlx::query(
+        "INSERT INTO variance_report_artifacts \
+         (task_run_id, property_id, period_id, report_path, report_markdown, actual_noi, budget_noi, issued_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&result.task_run_id)
+    .bind(property_id)
+    .bind(period_id)
+    .bind(path.to_string_lossy().as_ref())
+    .bind(&markdown)
+    .bind(result.noi_bridge.actual_noi)
+    .bind(result.noi_bridge.budget_noi)
+    .bind(db::now_iso())
+    .execute(pool)
+    .await;
+    if let Err(err) = saved {
+        let _ = fs::remove_file(&path);
+        return Err(err.into());
+    }
     Ok(path)
 }
 
