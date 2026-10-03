@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import venv
+from contextlib import closing
 from pathlib import Path
 
 
@@ -82,7 +83,7 @@ def verify(wheel):
             )
         )
         assert report["variance"]["noi_bridge"]["actual_noi"] == "0.30"
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection:
             assert connection.execute(
                 "SELECT DISTINCT typeof(amount_cents) FROM exact_gl"
             ).fetchall() == [("integer",)]
