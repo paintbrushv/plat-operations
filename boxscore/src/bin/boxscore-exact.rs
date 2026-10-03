@@ -8,6 +8,7 @@ use std::{
 
 #[derive(Parser)]
 #[command(
+    name = "boxscore-exact",
     version,
     about = "Exact-cent USD operating workflow; legacy floating-point commands are excluded"
 )]

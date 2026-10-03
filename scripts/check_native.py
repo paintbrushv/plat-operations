@@ -35,7 +35,7 @@ def verify(wheel):
 
         run(python, "-m", "pip", "install", "--no-deps", wheel)
         run(python, "-m", "pip", "check")
-        assert b"0.1.1" in run(binary, "--version")
+        assert run(binary, "--version").strip() == b"boxscore-exact 0.1.1"
         row = {
             "account_code": "4000",
             "account_name": "Rent",
