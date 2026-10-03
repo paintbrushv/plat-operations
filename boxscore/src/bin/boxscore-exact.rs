@@ -7,7 +7,10 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(version, about = "Exact-cent USD operating workflow; legacy floating-point commands are excluded")]
+#[command(
+    version,
+    about = "Exact-cent USD operating workflow; legacy floating-point commands are excluded"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
