@@ -1,0 +1,77 @@
+name: Native wheels
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            manylinux: '2_28'
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            manylinux: auto
+          - os: macos-15
+            target: aarch64-apple-darwin
+            manylinux: auto
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            manylinux: auto
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/release_gate.py
+      - uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: '1.15.0'
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --out dist
+          sccache: true
+      - name: Verify native wheel on Python 3.12
+        shell: bash
+        run: python scripts/check_native.py dist/*.whl
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify native wheel on Python 3.11
+        shell: bash
+        run: python scripts/check_native.py dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operations-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+  sdist:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pip install maturin==1.15.0
+      - run: maturin sdist --out dist
+      - name: Build the source distribution in isolation
+        run: pip wheel --no-deps dist/*.tar.gz --wheel-dir rebuilt
+      - name: Verify rebuilt native wheel
+        run: python scripts/check_native.py rebuilt/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operations-sdist
+          path: dist/*.tar.gz

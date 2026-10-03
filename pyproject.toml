@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "plat-operations"
+version = "0.1.1"
+description = "Checked-cent multifamily operating calculations and immutable local reports"
+readme = "PYTHON_PACKAGE.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
+[project.urls]
+Repository = "https://github.com/paintbrushv/plat-operations"
+Documentation = "https://github.com/paintbrushv/plat-operations/blob/main/docs/EXACT_CENTS.md"
+
+[tool.maturin]
+manifest-path = "boxscore/Cargo.toml"
+bindings = "bin"
+targets = [{ name = "boxscore-exact", kind = "bin" }]
+locked = true
+strip = true
+include = [{ path = "boxscore/Cargo.lock", format = "sdist" }]

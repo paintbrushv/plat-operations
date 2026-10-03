@@ -1,0 +1,36 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/release_gate.py --tag "$RELEASE_TAG" --check-registry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+  verify:
+    needs: gate
+    uses: ./.github/workflows/wheels.yml
+  rust-tests:
+    needs: gate
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: [verify, rust-tests]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: operations-*
+          merge-multiple: true
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

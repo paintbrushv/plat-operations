@@ -1,9 +1,9 @@
 [package]
 name = "boxscore"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Local-first multifamily NOI variance intelligence harness"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 anyhow = "1"
