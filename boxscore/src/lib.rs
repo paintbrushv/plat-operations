@@ -11,6 +11,7 @@ pub mod connectors;
 pub mod data_registry;
 pub mod db;
 pub mod evolution;
+pub mod exact;
 pub mod gaps;
 pub mod ingest;
 pub mod intake;
