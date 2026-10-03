@@ -1,5 +1,7 @@
 # Boxscore
 
+**v0.1 candidate:** use the [exact-cent workflow](../docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
+
 **The operating intelligence layer for multifamily portfolios.**
 
 Boxscore is a local-first Rust harness for multifamily operating intelligence. The first wedge is **Boxscore Ops v0.1: Multifamily Ops Variance Intelligence**: a narrow analyst that explains why NOI missed or beat budget, what operating signals may explain the movement, what evidence supports the conclusion, and what data is still missing.

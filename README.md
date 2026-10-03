@@ -1,5 +1,7 @@
 # plat-operations (BOXSCORE)
 
+**v0.1 candidate:** use the [exact-cent workflow](docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
+
 **Local-first, AI-native multifamily asset-management intelligence harness** — the Rust
 crate lives in [`boxscore/`](boxscore/). It ingests standardized multifamily operating
 data (GL, budgets, rent roll, receivables, leasing, monthly actuals) into SQLite,

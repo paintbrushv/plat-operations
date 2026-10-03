@@ -24,11 +24,21 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         .with_context(|| format!("invalid database url: {database_url}"))?
         .busy_timeout(Duration::from_secs(5))
         .create_if_missing(true);
-    SqlitePoolOptions::new()
+    let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await
-        .with_context(|| format!("failed to connect to database: {database_url}"))
+        .with_context(|| format!("failed to connect to database: {database_url}"))?;
+    let application_id: i64 = sqlx::query_scalar("PRAGMA application_id")
+        .fetch_one(&pool)
+        .await?;
+    if application_id == crate::exact::APPLICATION_ID {
+        pool.close().await;
+        return Err(anyhow!(
+            "exact-cent database requires boxscore-exact; legacy writer refused"
+        ));
+    }
+    Ok(pool)
 }
 
 pub async fn init_database(pool: &SqlitePool) -> Result<()> {
