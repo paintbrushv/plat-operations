@@ -48,7 +48,7 @@ negatives. The producer preserves signs and flags negative net expenses.
 The optional `--snapshot snapshot.json` CSV argument accepts the snapshot object
 above. Occupied, vacant, and down units must sum to the stated unit count.
 Missing snapshots and missing GL sides require review. Review totals cover only
-account identities with both actual and budget rows; excluded rows retain their
+account codes with both actual and budget rows; excluded rows retain their
 amounts and reasons. A stated zero budget is included. Each CSV row contributes
 once; repeated full imports with identical canonical content are idempotent.
 Reconcile duplicate rows in the source before importing.
@@ -147,3 +147,8 @@ Binary distribution and clean platform installs remain release work. The root
 repository license and existing Cargo license metadata disagree; settle that
 before publishing a Rust package. No real customer database has been migrated
 as part of these synthetic tests.
+
+Account-code matching tolerates different display names and category case or
+surrounding whitespace. The producer uses a deterministic display name and a
+normalized category. Conflicting categories for one code refuse with
+`ACCOUNT_MAPPING_CONFLICT`; resolve the mapping before import or calculation.

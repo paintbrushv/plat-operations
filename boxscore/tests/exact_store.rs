@@ -174,3 +174,38 @@ async fn missing_budget_is_excluded_and_overflow_import_is_atomic() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[tokio::test]
+async fn coverage_uses_account_codes_and_preserves_complete_totals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = store::create(&tmp.path().join("exact.sqlite"))
+        .await
+        .unwrap();
+    let mut data = dataset();
+    data.budgets[0].account_name = "Different budget label".into();
+    data.budgets[0].category = " Rental Income ".into();
+    let id = store::import(&pool, &data, None, None, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let report = store::review(&pool, &id).await.unwrap();
+    assert_eq!(report["variance"]["noi_bridge"]["noi_variance"], "10.05");
+    assert!(report["excluded_accounts"].as_array().unwrap().is_empty());
+    assert_eq!(
+        report["variance"]["by_account"].as_array().unwrap().len(),
+        1
+    );
+    data.budgets[0].category = "repairs".into();
+    assert_eq!(
+        store::import(
+            &pool,
+            &data,
+            Some(&id),
+            Some("conflicting map"),
+            &serde_json::json!({})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "ACCOUNT_MAPPING_CONFLICT"
+    );
+}

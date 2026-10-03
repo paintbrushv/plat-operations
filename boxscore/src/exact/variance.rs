@@ -31,7 +31,8 @@ pub fn compute(actuals: &[Line], budgets: &[Line]) -> Result<Variance> {
     if actuals.len() + budgets.len() > 100_000 {
         return Err(error("INPUT_LIMIT", "Too many GL rows"));
     }
-    let mut totals: BTreeMap<(String, String, String), [Money; 2]> = BTreeMap::new();
+    let mut totals: BTreeMap<String, [Money; 2]> = BTreeMap::new();
+    let mut labels: BTreeMap<String, (String, String)> = BTreeMap::new();
     for (rows, side) in [(actuals, 0), (budgets, 1)] {
         for row in rows {
             if row.account_code.is_empty()
@@ -45,20 +46,29 @@ pub fn compute(actuals: &[Line], budgets: &[Line]) -> Result<Variance> {
                     "Invalid account identity or category",
                 ));
             }
-            let values = totals
-                .entry((
-                    row.account_code.clone(),
-                    row.account_name.clone(),
-                    row.category.clone(),
-                ))
-                .or_default();
+            let category = row.category.trim().to_lowercase();
+            let label = labels
+                .entry(row.account_code.clone())
+                .or_insert_with(|| (row.account_name.clone(), category.clone()));
+            if label.1 != category {
+                return Err(error(
+                    "ACCOUNT_MAPPING_CONFLICT",
+                    "One account code has conflicting categories; review the mapping",
+                ));
+            }
+            // Stable display label; identity and coverage are the account code.
+            if row.account_name < label.0 {
+                label.0 = row.account_name.clone();
+            }
+            let values = totals.entry(row.account_code.clone()).or_default();
             values[side] = values[side].checked_add(row.amount)?;
         }
     }
     let mut rows = Vec::new();
     let (mut revenue, mut expense, mut unmapped) =
         ([Money::ZERO; 2], [Money::ZERO; 2], [Money::ZERO; 2]);
-    for ((code, name, category), amounts) in totals {
+    for (code, amounts) in totals {
+        let (name, category) = labels.remove(&code).unwrap();
         let target = match account_class(&category) {
             AccountClass::Revenue => &mut revenue,
             AccountClass::Expense => &mut expense,
