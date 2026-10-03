@@ -5,6 +5,7 @@ name: boxscore-ci
 # steps run from there. See AGENTS.md / docs/BOXSCORE_ENGINEERING.md.
 
 on:
+  workflow_call:
   push:
     branches: [main]
     paths:
