@@ -364,13 +364,7 @@ pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
             "Stored period no longer matches its input hash",
         ));
     }
-    let key = |l: &Line| {
-        (
-            l.account_code.clone(),
-            l.account_name.clone(),
-            l.category.clone(),
-        )
-    };
+    let key = |l: &Line| l.account_code.clone();
     let actual_keys: std::collections::BTreeSet<_> = data.actuals.iter().map(&key).collect();
     let budget_keys: std::collections::BTreeSet<_> = data.budgets.iter().map(&key).collect();
     let mut excluded = Vec::new();

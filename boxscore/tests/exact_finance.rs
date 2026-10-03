@@ -94,3 +94,18 @@ fn aggregate_overflow_and_negative_expense_review_are_explicit() {
         .review_reasons
         .contains(&"negative_net_expenses".to_string()));
 }
+
+#[test]
+fn matching_codes_tolerate_names_and_category_format_but_refuse_conflicts() {
+    let a = line("4000", " Rental Income ", "100.10");
+    let mut b = line("4000", "rental income", "90.00");
+    b.account_name = "Budget rent label".into();
+    let result = compute(std::slice::from_ref(&a), std::slice::from_ref(&b)).unwrap();
+    assert_eq!(result.by_account.len(), 1);
+    assert_eq!(result.by_account[0].variance.to_string(), "10.10");
+    b.category = "repairs".into();
+    assert_eq!(
+        compute(&[a], &[b]).unwrap_err().code,
+        "ACCOUNT_MAPPING_CONFLICT"
+    );
+}
