@@ -39,7 +39,7 @@ is negative and records an `expense_sign_anomaly` gap. This is a refusal, not
 an automatic sign flip: individual expense credits and the sign conventions
 of real Yardi/ResMan exports still require source review.
 
-The existing `/home/ubuntu/projects/plat-operations/boxscore/data/boxscore_demo.db`
+The existing `boxscore/data/boxscore_demo.db`
 was not modified. It still contains the old negative-expense sample rows and
 must be rebuilt or explicitly reconciled on a protected copy before its older
 NOI reports are used. The September synthetic adapter already uses positive

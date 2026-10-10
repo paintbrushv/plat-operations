@@ -52,7 +52,7 @@ stale or tampered report refusal, and rejection of a negative-expense budget
 sign. It also rejects unattributed actuals before sealing.
 
 A protected local run used a fresh SQLite backup of
-`/home/ubuntu/projects/plat-operations/boxscore/data/boxscore_demo.db`. The
+`boxscore/data/boxscore_demo.db`. The
 source SHA-256 remained
 `aba1504252b4c0e0badc9a08c952b745536cf1d776a5721d739aae8df5936397`.
 The original demo contained only March–May 2026 financial periods and three
