@@ -613,7 +613,7 @@ async fn refusals_name_their_cause() {
 }
 
 #[tokio::test]
-async fn catalog_lists_ten_functions_with_t12_last_and_schemas_agree() {
+async fn catalog_lists_eleven_functions_with_t12_last_and_schemas_agree() {
     let envelope = catalog::invoke(&Call {
         function: "describe".into(),
         version: None,
@@ -623,8 +623,8 @@ async fn catalog_lists_ten_functions_with_t12_last_and_schemas_agree() {
     .await;
     let described = result(&envelope);
     let entries = described["calculations"].as_array().unwrap();
-    assert_eq!(entries.len(), 10);
-    let last = &entries[9];
+    assert_eq!(entries.len(), 11);
+    let last = &entries[10];
     assert_eq!(last["name"], "t12");
     assert_eq!(last["version"], "1.0.0");
     assert_eq!(last["stateful"], true);

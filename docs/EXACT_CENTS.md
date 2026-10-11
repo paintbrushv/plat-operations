@@ -97,6 +97,7 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 | `occupancy@1.0.0` | no | occupied units over unit count as a ratio, with the unit counts and `down_units_present` review reason |
 | `economic_occupancy@1.0.0` | no | in-place rent over market rent as a ratio, both totals echoed; refuses `MISSING_MARKET_RENT`, `MISSING_IN_PLACE_RENT`, `ZERO_DENOMINATOR` |
 | `delinquency@1.0.0` | no | delinquent, prepaid and net balances, each as a share of in-place rent; refuses `MISSING_DELINQUENCY` |
+| `close_readiness@1.0.0` | yes | per property with a revision for `period` (optionally one `property`): the latest revision, `ready` or `not_ready`, account coverage counts, blocking review reasons from `review_period`, issued reports, and `not_tracked_in_exact_store` |
 | `t12@1.0.0` | yes | trailing twelve-period statement for `property` ending at `end_period`: category rows, NOI, budgets and actual-minus-budget NOI per month, the revision used for each month, and `missing_periods`; refuses `NOT_FOUND` when the property has no revision in the window |
 
 The three snapshot metrics (`occupancy`, `economic_occupancy`, `delinquency`) take exactly one of `{"revision_id": "..."}` or
@@ -106,6 +107,17 @@ snapshot they never open a database. With `revision_id` the host must supply
 a snapshot (otherwise `MISSING_OCCUPANCY_SNAPSHOT`). An inline snapshot is
 validated like an imported one: canonical date and non-negative counts that sum
 to `unit_count`. Any review reason makes the status `review_required`.
+
+`close_readiness` takes `{"period": "YYYY-MM", "property": optional}` and needs
+the host's `--database`. For each property it uses the latest revision of the
+period and reports `ready` only when actuals, budgets and an in-period snapshot
+are present, `store::review` raises no review reason, and at least one report
+has been issued for that revision. Coverage counts are distinct account codes.
+Collections context and the weekly BDDRE/RPCOE inputs the legacy check covers
+are not in the exact store and are listed under `not_tracked_in_exact_store`.
+The envelope is `review_required` when any property is `not_ready` or none
+matched (`no_revisions_for_period`), otherwise `calculated`. Tampered rows
+refuse `INTEGRITY_ERROR`.
 
 `t12` takes `{"property", "end_period": "YYYY-MM", "revision_policy"}`. Each of
 the twelve months uses one stored revision, checked against its input hash:
