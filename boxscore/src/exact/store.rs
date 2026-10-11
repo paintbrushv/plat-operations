@@ -367,19 +367,33 @@ pub async fn load(pool: &SqlitePool, id: &str) -> Result<Dataset> {
     })
 }
 
-pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
+/// [`load`], then check the canonical dataset against the revision's stored
+/// `input_sha256`. A row changed after import refuses with `INTEGRITY_ERROR`
+/// instead of feeding altered numbers to a calculation. Does not run
+/// [`Dataset::validate`]; callers do that on data they now know is unaltered.
+pub async fn load_verified(pool: &SqlitePool, id: &str) -> Result<Dataset> {
     let data = load(pool, id).await?;
-    data.validate()?;
-    let row = sqlx::query("SELECT * FROM exact_revisions WHERE id=?")
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
-    if digest(&serde_json::to_vec(&data)?) != row.get::<String, _>("input_sha256") {
+    let expected: String =
+        sqlx::query_scalar("SELECT input_sha256 FROM exact_revisions WHERE id=?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    if digest(&serde_json::to_vec(&data)?) != expected {
         return Err(error(
             "INTEGRITY_ERROR",
             "Stored period no longer matches its input hash",
         ));
     }
+    Ok(data)
+}
+
+pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
+    let data = load_verified(pool, id).await?;
+    data.validate()?;
+    let row = sqlx::query("SELECT * FROM exact_revisions WHERE id=?")
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
     let key = |l: &Line| l.account_code.clone();
     let actual_keys: std::collections::BTreeSet<_> = data.actuals.iter().map(&key).collect();
     let budget_keys: std::collections::BTreeSet<_> = data.budgets.iter().map(&key).collect();
