@@ -21,6 +21,19 @@ jobs:
   rust-tests:
     needs: gate
     uses: ./.github/workflows/ci.yml
+  # Container image: built, checked, pushed to GHCR and signed after the gate.
+  # It runs alongside the PyPI path and does not block `publish`. Registry
+  # write and OIDC token permissions are granted to this job only. Actions are
+  # pinned by major tag; pin them to commit SHAs when cutting a release.
+  image:
+    needs: gate
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/image.yml
+    with:
+      push: true
   publish:
     needs: [verify, rust-tests]
     runs-on: ubuntu-latest

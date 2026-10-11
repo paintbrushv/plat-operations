@@ -1,0 +1,235 @@
+name: Container image
+
+# Builds the boxscore-exact image from the root Dockerfile, proves it works and
+# is locked down (scripts/check_image.py: non-root, no shell, no baked data,
+# describe / init / import-csv / review / MCP stdio on synthetic data, all with
+# --network none --read-only), and generates SBOMs. Nothing is pushed on pull
+# requests or main. On release tags, release.yml calls this workflow with
+# `push: true`; the publish job then pushes the exact image that was tested to
+# GHCR as <version> and sha-<short rev>, signs it with cosign keyless and
+# attaches the image SBOM as a signed attestation.
+#
+# Actions are pinned by major version tag. Pin each one to a full commit SHA
+# when cutting a release, and re-resolve the base image digests in the
+# Dockerfile at the same time.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'boxscore/**'
+      - 'scripts/check_image.py'
+      - '.github/workflows/image.yml'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'boxscore/**'
+      - 'scripts/check_image.py'
+      - '.github/workflows/image.yml'
+  workflow_call:
+    inputs:
+      push:
+        description: Push the tested image to GHCR, sign it and attest its SBOM (release tags only).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LOCAL_IMAGE: boxscore-exact:ci
+
+jobs:
+  build:
+    name: build · check · SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version and revision
+        id: meta
+        env:
+          PUSH: ${{ inputs.push }}
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('boxscore/Cargo.toml', 'rb'))['package']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "revision=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          if [ "$PUSH" = "true" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Release tag $GITHUB_REF_NAME does not match Cargo version $version"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image (loaded locally, never pushed from this job)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          tags: ${{ env.LOCAL_IMAGE }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ steps.meta.outputs.revision }}
+          cache-from: type=gha,scope=boxscore-exact
+          cache-to: type=gha,mode=max,scope=boxscore-exact
+
+      - name: Check the image (config, filesystem, behaviour, backup/restore)
+        run: >-
+          python3 scripts/check_image.py "$LOCAL_IMAGE"
+          --expect-version "${{ steps.meta.outputs.version }}"
+          --expect-revision "${{ steps.meta.outputs.revision }}"
+
+      - name: Spell out the headline checks
+        run: |
+          set -euo pipefail
+          # Default command: stateless describe envelope with status "calculated".
+          docker run --rm --network none "$LOCAL_IMAGE" \
+            | python3 -c "import json, sys; e = json.load(sys.stdin); assert e['status'] == 'calculated', e; print('describe:', e['status'])"
+          # No shell.
+          if docker run --rm --entrypoint /bin/sh "$LOCAL_IMAGE" -c true 2>/dev/null; then
+            echo "::error::/bin/sh started inside the image"; exit 1
+          fi
+          # Non-root user.
+          user=$(docker inspect --format '{{.Config.User}}' "$LOCAL_IMAGE")
+          echo "user: $user"
+          [ "$user" = "65532:65532" ]
+          {
+            echo "### boxscore-exact image"
+            echo "- version: \`${{ steps.meta.outputs.version }}\`, revision: \`${{ steps.meta.outputs.revision }}\`"
+            echo "- image id: \`$(docker image inspect --format '{{.Id}}' "$LOCAL_IMAGE")\`"
+            echo "- size: $(docker image inspect --format '{{.Size}}' "$LOCAL_IMAGE") bytes, user: \`$user\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: SBOM of the image (distroless packages and the binary)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.LOCAL_IMAGE }}
+          format: spdx-json
+          output-file: sbom/boxscore-exact-image.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: SBOM of the Rust dependency lockfile
+        uses: anchore/sbom-action@v0
+        with:
+          file: boxscore/Cargo.lock
+          format: spdx-json
+          output-file: sbom/boxscore-cargo-lock.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boxscore-exact-sbom
+          path: sbom/
+          if-no-files-found: error
+
+      - name: Save the tested image for the publish job
+        if: ${{ inputs.push }}
+        run: |
+          mkdir -p image
+          docker save "$LOCAL_IMAGE" -o image/boxscore-exact.tar
+
+      - if: ${{ inputs.push }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: boxscore-exact-image
+          path: image/boxscore-exact.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: push to GHCR · sign · attest SBOM
+    if: ${{ inputs.push }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The only job with registry write and OIDC token permissions.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: boxscore-exact-image
+          path: image
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boxscore-exact-sbom
+          path: sbom
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Push the tested image
+        id: push
+        run: |
+          set -euo pipefail
+          docker load -i image/boxscore-exact.tar
+          ref="ghcr.io/${GITHUB_REPOSITORY,,}"
+          for tag in "$VERSION" "sha-${GITHUB_SHA::7}"; do
+            docker tag "$LOCAL_IMAGE" "$ref:$tag"
+            docker push "$ref:$tag"
+          done
+          digest=$(docker buildx imagetools inspect "$ref:$VERSION" --format '{{json .Manifest}}' \
+            | python3 -c "import json, sys; print(json.load(sys.stdin)['digest'])")
+          other=$(docker buildx imagetools inspect "$ref:sha-${GITHUB_SHA::7}" --format '{{json .Manifest}}' \
+            | python3 -c "import json, sys; print(json.load(sys.stdin)['digest'])")
+          [ "$digest" = "$other" ]
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Sign (keyless) and attest the SBOM
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$REF@$DIGEST"
+          cosign attest --yes --type spdxjson \
+            --predicate sbom/boxscore-exact-image.spdx.json "$REF@$DIGEST"
+
+      - name: Verify the signature and attestation as a user would
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/image.yml@${GITHUB_REF}"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" \
+            "$REF@$DIGEST" > /dev/null
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" \
+            "$REF@$DIGEST" > /dev/null
+          {
+            echo "### Published"
+            echo "- \`$REF:$VERSION\` and \`$REF:sha-${GITHUB_SHA::7}\`"
+            echo "- digest: \`$DIGEST\`"
+            echo "- signer identity: \`$identity\`"
+          } >> "$GITHUB_STEP_SUMMARY"

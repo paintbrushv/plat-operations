@@ -34,6 +34,9 @@ accepts a path, SQL or network target, and a `database` field in tool
 arguments is refused as `INVALID_INPUT`. `import_period` takes the dataset
 inline only.
 
+To run the server from the container image instead of a native binary, see
+[INSTALL.md](../INSTALL.md#mcp-over-stdio-claude-desktop).
+
 ## Tools
 
 There is one tool per catalog function. Each tool's input schema is the
