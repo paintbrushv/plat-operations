@@ -220,6 +220,9 @@ part of the catalog.
 `boxscore-exact mcp [--database PATH]` serves the same catalog as an MCP
 server over stdio, one tool per function, for Claude Desktop and other MCP
 clients; see [connectors/claude-desktop.md](connectors/claude-desktop.md).
+`boxscore-exact serve` serves the catalog over HTTP (MCP Streamable HTTP at
+`/mcp`, `POST /v1/calc/{function}`, and the contract at `/openapi.json`), with
+bearer API keys; see [connectors/remote-mcp.md](connectors/remote-mcp.md).
 
 ### Ratios
 
