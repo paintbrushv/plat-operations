@@ -26,6 +26,21 @@ pub enum AccountClass {
     Unmapped,
 }
 
+/// The canonical spelling of a reviewed NOI category, matched without regard
+/// to case or surrounding whitespace. `None` means the string is not one of
+/// `NOI_CATEGORIES` or `Unmapped`, so an ingest must refuse it rather than let
+/// `account_class` fold it into expenses.
+pub fn canonical_category(category: &str) -> Option<&'static str> {
+    let wanted = category.trim();
+    if wanted.eq_ignore_ascii_case("unmapped") {
+        return Some("Unmapped");
+    }
+    NOI_CATEGORIES
+        .iter()
+        .copied()
+        .find(|known| known.eq_ignore_ascii_case(wanted))
+}
+
 pub fn account_class(category: &str) -> AccountClass {
     match category.trim().to_ascii_lowercase().as_str() {
         "rental income" | "concessions" | "bad debt" | "other income" => AccountClass::Revenue,
@@ -53,6 +68,24 @@ pub fn economic_occupancy(in_place_rent_total: f64, market_rent_total: f64) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_category_folds_case_and_refuses_unknown_names() {
+        assert_eq!(canonical_category(" rental income "), Some("Rental Income"));
+        assert_eq!(
+            canonical_category("REPAIRS & MAINTENANCE"),
+            Some("Repairs & Maintenance")
+        );
+        assert_eq!(canonical_category("unmapped"), Some("Unmapped"));
+        for unknown in [
+            "Total",
+            "Net Operating Income",
+            "Repairs and Maintenance",
+            "",
+        ] {
+            assert_eq!(canonical_category(unknown), None, "{unknown:?}");
+        }
+    }
 
     #[test]
     fn computes_physical_occupancy_with_down_units_in_denominator() {

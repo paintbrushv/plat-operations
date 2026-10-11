@@ -11,10 +11,23 @@ All v0.1 ingestion uses CSV files with headers.
 `property,period,account_code,account_name,category,amount`
 
 - `property` must match an ingested property name.
-- `period` must be `YYYY-MM`.
-- `amount` is numeric.
-- Revenue is positive.
-- Contra-revenue and expenses are negative.
+- `period` must be `YYYY-MM`. Any other spelling refuses the file.
+- `category` must be one of the reviewed NOI categories in `ontology::NOI_CATEGORIES`
+  (`Rental Income`, `Concessions`, `Bad Debt`, `Other Income`, `Payroll`,
+  `Repairs & Maintenance`, `Utilities`, `Marketing`, `Administrative`, `Taxes`,
+  `Insurance`, `Management Fees`) or `Unmapped`, matched case-insensitively and
+  stored in canonical spelling. Any other value refuses the file: an unknown
+  category would otherwise be summed into expenses silently.
+- `amount` is numeric. `$`, thousands separators and `%` are stripped;
+  `(500.00)` means `-500.00`; blank, `-` and `()` mean zero; `nan`, `inf`
+  and unbalanced parentheses refuse the row.
+- Sign convention (see `ISSUED_REPORTS_AND_SIGN_CONVENTION.md`): revenue is
+  positive, contra-revenue (`Concessions`, `Bad Debt`) is negative inside the
+  revenue total, and expenses carry their natural **positive** sign, so
+  `NOI = revenue - expenses`. A negative net expense total blocks report issuance.
+- A file whose header does not carry every contract column, or whose rows are
+  ragged, refuses before any row is written. Nothing is deleted or inserted for
+  a file that fails validation.
 
 ## Rent Roll Snapshots
 
