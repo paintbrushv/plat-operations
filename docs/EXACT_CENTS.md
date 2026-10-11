@@ -217,6 +217,10 @@ JSON has no path, SQL or network field, and the stateless `protocol` refuses
 them with `DATABASE_REQUIRED`. Legacy floating-point calculations are never
 part of the catalog.
 
+`boxscore-exact mcp [--database PATH]` serves the same catalog as an MCP
+server over stdio, one tool per function, for Claude Desktop and other MCP
+clients; see [connectors/claude-desktop.md](connectors/claude-desktop.md).
+
 ### Ratios
 
 Rates are never floats. A ratio is
