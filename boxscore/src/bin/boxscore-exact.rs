@@ -1,4 +1,4 @@
-use boxscore::exact::{self, error, protocol, store, Result};
+use boxscore::exact::{self, catalog, error, protocol, store, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::{
@@ -20,6 +20,17 @@ struct Cli {
 enum Command {
     /// Stateless, bounded JSON stdin/stdout. Never accesses a database or local input path.
     Protocol,
+    /// Run one catalog function: input JSON on stdin, a provenance envelope on stdout.
+    /// `--database` is required by stateful functions and is never read from the input.
+    Call {
+        #[arg(long)]
+        function: String,
+        /// Exact version to pin; refused if the catalog serves a different one.
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        database: Option<PathBuf>,
+    },
     /// Create a new exact-cent database; existing paths are refused.
     Init {
         #[arg(long)]
@@ -112,7 +123,37 @@ async fn run(command: Command) -> Result<Value> {
             std::io::stdin()
                 .take((protocol::MAX_REQUEST_BYTES + 1) as u64)
                 .read_to_end(&mut bytes)?;
-            protocol::calculate(&bytes)
+            protocol::calculate(&bytes).await
+        }
+        Command::Call {
+            function,
+            version,
+            database,
+        } => {
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .take((protocol::MAX_REQUEST_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > protocol::MAX_REQUEST_BYTES {
+                return Err(error("INPUT_LIMIT", "Input exceeds 2 MiB"));
+            }
+            let empty = bytes.iter().all(u8::is_ascii_whitespace);
+            let call = catalog::Call {
+                function,
+                version,
+                input: if empty {
+                    json!({})
+                } else {
+                    serde_json::from_slice(&bytes)?
+                },
+                database,
+            };
+            let envelope = if empty {
+                catalog::invoke(&call).await
+            } else {
+                catalog::invoke_hashed(&call, exact::digest(&bytes)).await
+            };
+            Ok(envelope.to_value())
         }
         Command::Init { database } => {
             let pool = store::create(&database).await?;
@@ -202,7 +243,11 @@ async fn main() {
     // Intentionally no dotenv, tracing subscriber, HTTP server, or private legacy config.
     let result = run(Cli::parse().command).await;
     let (payload, code) = match result {
-        Ok(v) => (v, 0),
+        Ok(v) => {
+            // Catalog envelopes carry refusals inside the payload.
+            let refused = v.get("status").and_then(Value::as_str) == Some("refused");
+            (v, if refused { 2 } else { 0 })
+        }
         Err(e) => (protocol::refusal(&e), 2),
     };
     let mut stdout = std::io::stdout().lock();

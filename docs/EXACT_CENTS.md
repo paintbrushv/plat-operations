@@ -76,6 +76,53 @@ Every report says `human_approval: not_granted`.
 - Exact and legacy databases are distinct. New and old consumers reject the
   wrong schema instead of interpreting cents as dollars.
 
+## Calculation catalog and versioning policy
+
+Every calculation the agent connectors can reach is a named, versioned
+function in `boxscore::exact::catalog`. Run one directly:
+
+```bash
+echo '{}' | boxscore-exact call --function describe
+echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sqlite --function review_period
+```
+
+| function | stateful | what it returns |
+|---|---|---|
+| `describe@1.0.0` | no | the catalog with JSON Schemas for every function |
+| `noi_variance@1.0.0` | no | the `plat.ops/1` variance bridge from inline rows |
+| `import_period@1.0.0` | yes | `revision_id` for a canonical dataset (`supersedes` + `reason` for corrections) |
+| `review_period@1.0.0` | yes | the same body as `review` |
+| `issue_report@1.0.0` | yes | the same body as `issue` |
+| `list_revisions@1.0.0` | yes | stored revisions and their issued reports |
+
+Every response is an envelope:
+
+```json
+{"contract_version":"plat.ops/1","function":"noi_variance","version":"1.0.0",
+ "producer":{"name":"boxscore-exact","version":"0.1.1","arithmetic":"checked_i64_cents"},
+ "input_sha256":"…","output_sha256":"…","computed_at":"2026-10-11T15:00:00Z",
+ "status":"calculated","result":{…}}
+```
+
+`input_sha256` is the SHA-256 of the input bytes exactly as the transport
+received them (for in-process calls, of the canonical JSON serialization).
+`output_sha256` is the SHA-256 of the canonical JSON serialization of
+`result`; the same input to the same `function@version` always produces the
+same `output_sha256`, so a number can be reproduced from its citation.
+Refusals keep the envelope with `status: "refused"` and a typed `error`;
+`boxscore-exact call` exits 2 on a refusal and 0 otherwise.
+
+Versions are per function and independent of the contract version. A
+**patch** bump changes nothing observable in `result`; a **minor** bump only
+adds fields; a **major** bump may change a number for the same input. Pass
+`--version` (or `"version"` on the protocol) to pin one; a different served
+version refuses with `VERSION_MISMATCH` instead of silently answering.
+
+Stateful functions take `--database` from the host process only. The input
+JSON has no path, SQL or network field, and the stateless `protocol` refuses
+them with `DATABASE_REQUIRED`. Legacy floating-point calculations are never
+part of the catalog.
+
 ## Rust stdin/stdout protocol
 
 Run exactly `boxscore-exact protocol`, write one JSON request, then close stdin:
@@ -83,6 +130,11 @@ Run exactly `boxscore-exact protocol`, write one JSON request, then close stdin:
 ```json
 {"contract_version":"plat.ops/1","operation":"variance","currency":"USD","expense_convention":"positive_costs","actuals":[],"budgets":[]}
 ```
+
+Any other `operation` names a catalog function (for example `describe` or
+`noi_variance`); the remaining fields are its input and the response is the
+provenance envelope described above. The `variance` operation keeps its
+original response shape.
 
 This low-level function computes the supplied rows, including stated one-sided
 rows. The period-review layer applies missing-account coverage gates first.
