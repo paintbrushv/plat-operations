@@ -34,6 +34,47 @@ fn rent_roll_aggregates_without_retaining_resident_names() {
 }
 
 #[test]
+fn rent_roll_refuses_vendor_footer_rows_instead_of_counting_them_as_units() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file = temp_dir.path().join("rent_roll.csv");
+    // The juniper_fund D1 shape: a grand-total footer with $158,529 "market".
+    std::fs::write(
+        &file,
+        "unit,resident,name,market,charge_rent,property_id\nA101,Resident One,Resident One,1200,1100,p102\n171,Total,All Properties,158529,150000,p102\n",
+    )
+    .unwrap();
+    let err = read_rent_roll_snapshot(&file, "2026-06-09")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("row 3") && err.contains("footer"), "{err}");
+
+    // A resident whose name merely contains the word is a resident.
+    std::fs::write(
+        &file,
+        "unit,resident,name,market,charge_rent,property_id\nA101,Total Wine LLC,Total Wine LLC,1200,1100,p102\n",
+    )
+    .unwrap();
+    let snapshot = read_rent_roll_snapshot(&file, "2026-06-09").unwrap();
+    assert_eq!(
+        (snapshot.occupied_units, snapshot.market_rent_total),
+        (1, 1200.0)
+    );
+}
+
+#[test]
+fn aged_receivables_refuses_vendor_footer_rows_instead_of_doubling_totals() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file = temp_dir.path().join("aged_receivables.csv");
+    std::fs::write(
+        &file,
+        "property_id,resident_code,resident_name,current_owed,days_0_30,days_31_60,days_61_90,days_over_90,prepayments,total_owed,snapshot_date,total_delinquent\np101,R1,Resident One,999,10,20,30,40,-50,1049,2026-06-09,123\np101,Total,,999,10,20,30,40,-50,1049,2026-06-09,123\n",
+    )
+    .unwrap();
+    let err = read_delinquency_snapshot(&file).unwrap_err().to_string();
+    assert!(err.contains("row 3") && err.contains("footer"), "{err}");
+}
+
+#[test]
 fn aged_receivables_prefers_total_delinquent_when_available() {
     let temp_dir = tempfile::tempdir().unwrap();
     let file = temp_dir.path().join("aged_receivables.csv");

@@ -26,6 +26,8 @@ pub fn read_delinquency_snapshot(path: &Path) -> Result<DelinquencySnapshotAggre
     let mut reader = crate::parse::csv_reader_from_path(path)
         .with_context(|| format!("failed to open aged receivables CSV: {}", path.display()))?;
     let headers = reader.headers()?.clone();
+    let resident_code_idx = header_index(&headers, &["resident_code", "resident"]);
+    let resident_name_idx = header_index(&headers, &["resident_name", "name"]);
     let snapshot_date_idx = header_index(&headers, &["snapshot_date", "as_of_date"]);
     let total_delinquent_idx = header_index(&headers, &["total_delinquent"]);
     let prepayments_idx = header_index(&headers, &["prepayments", "prepaid_amount"]);
@@ -63,6 +65,12 @@ pub fn read_delinquency_snapshot(path: &Path) -> Result<DelinquencySnapshotAggre
     for record in reader.records() {
         let record = record?;
         aggregate.rows_seen += 1;
+        super::rent_roll::refuse_footer_row(
+            path,
+            aggregate.rows_seen + 1,
+            &record,
+            [resident_code_idx, resident_name_idx],
+        )?;
 
         if aggregate.as_of_date.is_empty() {
             if let Some(idx) = snapshot_date_idx {

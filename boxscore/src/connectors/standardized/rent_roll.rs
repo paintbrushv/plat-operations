@@ -24,6 +24,28 @@ pub struct RentRollSnapshotAggregate {
     pub missing_fields: Vec<String>,
 }
 
+/// A vendor grand-total or subtotal row counted as a unit adds one occupied
+/// unit and its summed market rent to the snapshot (contract C1). The ingest
+/// connectors never ran the validator, so refuse such a row here, naming it.
+pub(crate) fn refuse_footer_row<const N: usize>(
+    path: &Path,
+    source_row: usize,
+    record: &csv::StringRecord,
+    identity_columns: [Option<usize>; N],
+) -> Result<()> {
+    for idx in identity_columns.into_iter().flatten() {
+        if let Some(value) = record.get(idx) {
+            if super::validator::is_footer_cell(value) {
+                anyhow::bail!(
+                    "{} row {source_row}: {value:?} is a vendor total/footer row, not a unit or resident; remove footer rows before ingest (contract C1)",
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn read_rent_roll_snapshot(
     path: &Path,
     fallback_as_of_date: &str,
@@ -31,6 +53,7 @@ pub fn read_rent_roll_snapshot(
     let mut reader = crate::parse::csv_reader_from_path(path)
         .with_context(|| format!("failed to open rent roll CSV: {}", path.display()))?;
     let headers = reader.headers()?.clone();
+    let unit_idx = header_index(&headers, &["unit", "unit_code"]);
     let resident_idx = header_index(&headers, &["resident", "resident_code"]);
     let name_idx = header_index(&headers, &["name", "resident_name"]);
     let market_idx = header_index(&headers, &["market"]);
@@ -87,6 +110,12 @@ pub fn read_rent_roll_snapshot(
     for record in reader.records() {
         let record = record?;
         aggregate.rows_seen += 1;
+        refuse_footer_row(
+            path,
+            aggregate.rows_seen + 1,
+            &record,
+            [unit_idx, resident_idx, name_idx],
+        )?;
         if let Some(idx) = as_of_idx {
             if let Some(value) = cell(&record, idx).filter(|value| !value.is_empty()) {
                 aggregate.as_of_date = value.to_string();

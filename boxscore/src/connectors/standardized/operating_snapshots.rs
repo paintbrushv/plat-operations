@@ -83,7 +83,9 @@ pub async fn ingest_operating_snapshots_files(
 
     // Per-unit leases: parse the same rent_roll CSV and insert one row per unit.
     // Errors are non-fatal — the aggregate snapshot above is the authoritative signal.
-    let rent_roll_period = &rent_roll.as_of_date[..7.min(rent_roll.as_of_date.len())];
+    // Character-based prefix: a byte slice panics on a non-ASCII date string.
+    let rent_roll_period: String = rent_roll.as_of_date.chars().take(7).collect();
+    let rent_roll_period = rent_roll_period.as_str();
     let already_have_leases = db::leases_snapshot_exists(pool, &property_id, rent_roll_period)
         .await
         .unwrap_or(false);
@@ -197,7 +199,8 @@ pub async fn ingest_operating_snapshots_files(
 
     // Per-unit receivables: parse the same CSV and insert one row per resident.
     // Errors are non-fatal — the aggregate snapshot above is the authoritative signal.
-    let delinquency_period = &delinquency.as_of_date[..7.min(delinquency.as_of_date.len())];
+    let delinquency_period: String = delinquency.as_of_date.chars().take(7).collect();
+    let delinquency_period = delinquency_period.as_str();
     let already_have_receivables =
         db::receivables_snapshot_exists(pool, &property_id, delinquency_period)
             .await

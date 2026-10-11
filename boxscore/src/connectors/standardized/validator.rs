@@ -225,6 +225,12 @@ fn read_csv(path: &Path) -> Option<Table> {
     Some(Table { headers, rows })
 }
 
+/// True when a cell carries a vendor total/subtotal/footer token: `total`
+/// as an exact (case-insensitive) match, the multi-word phrases anywhere.
+pub fn is_footer_cell(cell: &str) -> bool {
+    FOOTER_TOKENS.iter().any(|token| footer_match(cell, token))
+}
+
 fn footer_match(cell: &str, token: &str) -> bool {
     let s = cell.to_ascii_lowercase();
     let s = s.trim();
