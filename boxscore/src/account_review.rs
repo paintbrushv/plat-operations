@@ -13,7 +13,7 @@ use crate::{
     models::AccountMapping,
 };
 
-const REVIEW_SOURCE_SYSTEM: &str = "standardized-yardi";
+const REVIEW_SOURCE_SYSTEM: &str = crate::connectors::standardized::STANDARDIZED_SOURCE_SYSTEM;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountReviewRow {

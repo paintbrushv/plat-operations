@@ -20,6 +20,13 @@ pub mod validator;
 
 use serde::{Deserialize, Serialize};
 
+/// Source-system label the legacy standardized-CSV lanes stamp on account
+/// mappings and review rows. One home for the string so the label cannot
+/// drift between the GL budget connector and the account review export.
+/// It is a lineage tag, not an ingestion profile: the exact-cent adapters in
+/// `exact::ingest` use versioned profile ids instead.
+pub const STANDARDIZED_SOURCE_SYSTEM: &str = "standardized-yardi";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StandardizedIngestSummary {
     pub lane: String,

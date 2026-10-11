@@ -13,12 +13,47 @@ cd boxscore
 cargo build --locked --release --bin boxscore-exact
 export PATH="$PWD/target/release:$PATH"
 boxscore-exact init --database ./exact.sqlite
-boxscore-exact import-csv --database ./exact.sqlite \
-  --actuals actuals.csv --budgets budgets.csv \
-  --property synthetic_ops --period 2026-05 --units 10
+boxscore-exact import-with --database ./exact.sqlite --profile canonical.csv/1 \
+  --file actuals=actuals.csv --file budgets=budgets.csv \
+  --option property=synthetic_ops --option period=2026-05 --option units=10
 boxscore-exact review --database ./exact.sqlite --revision REVISION_ID
 boxscore-exact issue --database ./exact.sqlite --revision REVISION_ID
 ```
+
+## Source adapters
+
+Every import goes through a source adapter selected by a versioned profile id
+(`name/N`). `boxscore-exact adapters` prints each registered adapter's spec:
+its files (with expected header or shape), options, and what makes it refuse.
+
+```bash
+boxscore-exact adapters
+boxscore-exact import-with --database ./exact.sqlite --profile canonical.json/1 --file input=period.json
+```
+
+`import-with` takes `--profile`, one `--file NAME=PATH` per input file, one
+`--option KEY=VALUE` per option, and `--supersedes`/`--reason` for
+corrections. A file or option the spec does not declare refuses with
+`UNKNOWN_FILE`/`UNKNOWN_OPTION`; an absent required one with
+`MISSING_FILE`/`MISSING_OPTION`; an unknown profile with `UNKNOWN_PROFILE`,
+listing the registered ones. Each file is capped at 2 MiB. The revision's
+`sources` records `profile` alongside the SHA-256 of each file read.
+
+| profile | files | options |
+|---|---|---|
+| `canonical.csv/1` | `actuals`, `budgets`, optional `snapshot` | `property`, `period`, `units` |
+| `canonical.json/1` | `input` | none |
+
+The older subcommands are aliases with unchanged arguments, refusals, and
+output; the only difference is that the stored `sources` now also names the
+`profile`:
+`import-csv --actuals A --budgets B [--snapshot S] --property P --period YYYY-MM --units N`
+is `import-with --profile canonical.csv/1`, and `import --input F` is
+`import-with --profile canonical.json/1`. The stored `input_sha256` is the
+hash of the canonical dataset, identical through either front end. How to
+write and version a new adapter is in `boxscore/docs/DATA_CONTRACTS.md`.
+
+## Canonical data
 
 Canonical CSV headers: `account_code,account_name,category,amount`. Monetary
 cells are decimal text, for example `100.10`, `-5.01`, or `0.00`. Vendor exports
@@ -29,7 +64,7 @@ ontology: rental income, concessions, bad debt, and other income are revenue;
 Supply expenses as positive costs, credits as negatives, and contra-revenue as
 negatives. The producer preserves signs and flags negative net expenses.
 
-`import --input period.json` accepts the same canonical data:
+`canonical.json/1` (`import --input period.json`) accepts the same canonical data:
 
 ```json
 {
@@ -45,7 +80,7 @@ negatives. The producer preserves signs and flags negative net expenses.
 }
 ```
 
-The optional `--snapshot snapshot.json` CSV argument accepts the snapshot object
+The optional `snapshot` file of `canonical.csv/1` (`--snapshot snapshot.json`) accepts the snapshot object
 above. Occupied, vacant, and down units must sum to the stated unit count.
 Missing snapshots and missing GL sides require review. Review totals cover only
 account codes with both actual and budget rows; excluded rows retain their
@@ -53,7 +88,7 @@ amounts and reasons. A stated zero budget is included. Each CSV row contributes
 once; repeated full imports with identical canonical content are idempotent.
 Reconcile duplicate rows in the source before importing.
 
-Corrections require `--supersedes CURRENT_REVISION_ID --reason "..."` on import.
+Corrections require `--supersedes CURRENT_REVISION_ID --reason "..."` on any import subcommand.
 Every correction adds a revision. Reports include the change in each bridge
 value versus the previous revision. Issuance always creates a new report ID;
 old report bodies stay unchanged. `calculated` means arithmetic completed.
@@ -91,7 +126,7 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 
 | function | stateful | what it returns |
 |---|---|---|
-| `describe@1.0.0` | no | the catalog with JSON Schemas for every function |
+| `describe@1.1.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
 | `noi_variance@1.0.0` | no | the `plat.ops/1` variance bridge from inline rows |
 | `import_period@1.0.0` | yes | `revision_id` for a canonical dataset (`supersedes` + `reason` for corrections) |
 | `review_period@1.0.0` | yes | the same body as `review` |
@@ -175,6 +210,8 @@ adds fields; a **major** bump may change a number for the same input. Pass
 `--version` (or `"version"` on the protocol) to pin one; a different served
 version refuses with `VERSION_MISMATCH` instead of silently answering.
 
+`describe` lists the source adapters for the operator's benefit only; the
+catalog never reads files, and `import_period` takes a dataset, not paths.
 Stateful functions take `--database` from the host process only. The input
 JSON has no path, SQL or network field, and the stateless `protocol` refuses
 them with `DATABASE_REQUIRED`. Legacy floating-point calculations are never

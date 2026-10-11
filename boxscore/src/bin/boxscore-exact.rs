@@ -1,4 +1,8 @@
-use boxscore::exact::{self, catalog, error, protocol, store, Result};
+use boxscore::exact::{
+    self, catalog, error,
+    ingest::{self, AdapterInputs},
+    protocol, store, Result,
+};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::{
@@ -44,7 +48,28 @@ enum Command {
         #[arg(long)]
         database: PathBuf,
     },
-    /// Import canonical JSON; corrections require the current revision and a reason.
+    /// Import files through a registered source adapter (`adapters` lists them).
+    /// Corrections require the current revision and a reason.
+    ImportWith {
+        #[arg(long)]
+        database: PathBuf,
+        /// Versioned adapter profile id, for example `canonical.csv/1`.
+        #[arg(long)]
+        profile: String,
+        /// A named input file, `NAME=PATH`; repeat for each file.
+        #[arg(long = "file", value_name = "NAME=PATH")]
+        files: Vec<String>,
+        /// A named adapter option, `KEY=VALUE`; repeat for each option.
+        #[arg(long = "option", value_name = "KEY=VALUE")]
+        options: Vec<String>,
+        #[arg(long)]
+        supersedes: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// List the registered source adapters and what each accepts and refuses.
+    Adapters,
+    /// Alias for `import-with --profile canonical.json/1 --file input=PATH`.
     Import {
         #[arg(long)]
         database: PathBuf,
@@ -55,7 +80,8 @@ enum Command {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Import canonical CSV GL rows with decimal-string money.
+    /// Alias for `import-with --profile canonical.csv/1` with files `actuals`,
+    /// `budgets`, optional `snapshot`, and options `property`, `period`, `units`.
     ImportCsv {
         #[arg(long)]
         database: PathBuf,
@@ -103,26 +129,38 @@ enum Command {
     },
 }
 
-fn read(path: &Path) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take((protocol::MAX_REQUEST_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > protocol::MAX_REQUEST_BYTES {
-        return Err(error("INPUT_LIMIT", "Input file exceeds 2 MiB"));
-    }
-    Ok(bytes)
-}
-fn csv_lines(bytes: &[u8]) -> Result<Vec<exact::variance::Line>> {
-    csv::Reader::from_reader(bytes)
-        .deserialize()
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| {
-            error(
+/// Split a repeated `NAME=VALUE` flag into a map, refusing malformed or
+/// repeated names.
+fn pairs(flag: &str, values: Vec<String>) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut map = std::collections::BTreeMap::new();
+    for value in values {
+        let (name, rest) = value
+            .split_once('=')
+            .filter(|(name, _)| !name.is_empty())
+            .ok_or_else(|| error("INVALID_INPUT", format!("--{flag} takes NAME=VALUE")))?;
+        if map.insert(name.to_string(), rest.to_string()).is_some() {
+            return Err(error(
                 "INVALID_INPUT",
-                "CSV requires account_code, account_name, category, and decimal amount",
-            )
-        })
+                format!("--{flag} {name:?} given more than once"),
+            ));
+        }
+    }
+    Ok(map)
+}
+/// The one import path: resolve the adapter, read, then store.
+async fn import_through(
+    database: &Path,
+    profile: &str,
+    inputs: &AdapterInputs,
+    supersedes: Option<&str>,
+    reason: Option<&str>,
+) -> Result<Value> {
+    let adapter = ingest::adapter(profile)?;
+    let (data, sources) = ingest::read_with(adapter, inputs)?;
+    let pool = store::open(database, false).await?;
+    let outcome = store::import(&pool, &data, supersedes, reason, &sources).await;
+    pool.close().await;
+    Ok(json!({"contract_version":exact::CONTRACT,"status":"imported","revision_id":outcome?}))
 }
 async fn run(command: Command) -> Result<Value> {
     match command {
@@ -181,25 +219,49 @@ async fn run(command: Command) -> Result<Value> {
                 json!({"contract_version":exact::CONTRACT,"status":"created","schema_version":exact::SCHEMA}),
             )
         }
+        Command::ImportWith {
+            database,
+            profile,
+            files,
+            options,
+            supersedes,
+            reason,
+        } => {
+            let inputs = AdapterInputs {
+                files: pairs("file", files)?
+                    .into_iter()
+                    .map(|(name, path)| (name, PathBuf::from(path)))
+                    .collect(),
+                options: pairs("option", options)?,
+            };
+            import_through(
+                &database,
+                &profile,
+                &inputs,
+                supersedes.as_deref(),
+                reason.as_deref(),
+            )
+            .await
+        }
+        Command::Adapters => Ok(json!({
+            "contract_version": exact::CONTRACT,
+            "adapters": ingest::describe_adapters(),
+        })),
         Command::Import {
             database,
             input,
             supersedes,
             reason,
         } => {
-            let bytes = read(&input)?;
-            let data: store::Dataset = serde_json::from_slice(&bytes)?;
-            let pool = store::open(&database, false).await?;
-            let id = store::import(
-                &pool,
-                &data,
+            let inputs = AdapterInputs::default().with_file("input", input);
+            import_through(
+                &database,
+                ingest::CANONICAL_JSON,
+                &inputs,
                 supersedes.as_deref(),
                 reason.as_deref(),
-                &json!({"canonical_json_sha256":exact::digest(&bytes)}),
             )
-            .await?;
-            pool.close().await;
-            Ok(json!({"contract_version":exact::CONTRACT,"status":"imported","revision_id":id}))
+            .await
         }
         Command::ImportCsv {
             database,
@@ -212,27 +274,23 @@ async fn run(command: Command) -> Result<Value> {
             supersedes,
             reason,
         } => {
-            let a = read(&actuals)?;
-            let b = read(&budgets)?;
-            let snap = snapshot.map(|p| read(&p)).transpose()?;
-            let data = store::Dataset {
-                property,
-                period,
-                currency: "USD".into(),
-                expense_convention: "positive_costs".into(),
-                unit_count: units,
-                actuals: csv_lines(&a)?,
-                budgets: csv_lines(&b)?,
-                snapshot: snap
-                    .as_ref()
-                    .map(|v| serde_json::from_slice(v))
-                    .transpose()?,
-            };
-            let pool = store::open(&database, false).await?;
-            let id = store::import(&pool,&data,supersedes.as_deref(),reason.as_deref(),
-                &json!({"actuals_sha256":exact::digest(&a),"budgets_sha256":exact::digest(&b),"snapshot_sha256":snap.as_ref().map(|v| exact::digest(v))})).await?;
-            pool.close().await;
-            Ok(json!({"contract_version":exact::CONTRACT,"status":"imported","revision_id":id}))
+            let mut inputs = AdapterInputs::default()
+                .with_file("actuals", actuals)
+                .with_file("budgets", budgets)
+                .with_option("property", property)
+                .with_option("period", period)
+                .with_option("units", units.to_string());
+            if let Some(snapshot) = snapshot {
+                inputs = inputs.with_file("snapshot", snapshot);
+            }
+            import_through(
+                &database,
+                ingest::CANONICAL_CSV,
+                &inputs,
+                supersedes.as_deref(),
+                reason.as_deref(),
+            )
+            .await
         }
         Command::Review { database, revision } => {
             let pool = store::open(&database, true).await?;
@@ -252,7 +310,7 @@ async fn run(command: Command) -> Result<Value> {
             destination,
             review,
         } => {
-            let approved = serde_json::from_slice(&read(&review)?)?;
+            let approved = serde_json::from_slice(&ingest::read_bounded(&review)?)?;
             exact::migration::migrate(&source, &destination, &approved).await
         }
     }
