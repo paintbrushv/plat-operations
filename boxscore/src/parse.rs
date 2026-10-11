@@ -7,13 +7,18 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 /// Parse a currency/numeric cell. Accounting-style blanks (``, `-`, `()`)
 /// mean zero; parentheses mean negative; `$`, `,`, and `%` are stripped.
 pub fn parse_money(value: &str) -> Result<f64> {
     let trimmed = value.trim();
-    let negated = trimmed.starts_with('(') && trimmed.ends_with(')');
+    let opens = trimmed.starts_with('(');
+    let closes = trimmed.ends_with(')');
+    if opens != closes {
+        bail!("invalid numeric value: {value} (unbalanced parentheses)");
+    }
+    let negated = opens && closes;
     let inner = trimmed.trim_start_matches('(').trim_end_matches(')');
     let cleaned = inner.replace(['$', ',', '%'], "");
     let cleaned = cleaned.trim();
@@ -23,6 +28,12 @@ pub fn parse_money(value: &str) -> Result<f64> {
     let parsed = cleaned
         .parse::<f64>()
         .with_context(|| format!("invalid numeric value: {value}"))?;
+    // `f64::from_str` accepts "nan", "inf" and "infinity"; a NaN or infinite
+    // cell would poison every SUM it touches and bypass sign checks, so it is
+    // an error, not a number.
+    if !parsed.is_finite() {
+        bail!("invalid numeric value: {value} (not a finite number)");
+    }
     Ok(if negated { -parsed.abs() } else { parsed })
 }
 
@@ -75,6 +86,25 @@ mod tests {
         assert!(parse_money("abc").is_err());
         assert!(parse_money("12abc").is_err());
         assert_eq!(parse_money_lenient("abc"), 0.0);
+    }
+
+    #[test]
+    fn rejects_non_finite_cells_instead_of_poisoning_sums() {
+        // pandas writes missing floats as "nan"; Rust's f64 parser accepts it.
+        for cell in ["nan", "NaN", "inf", "-inf", "Infinity", "$nan"] {
+            let err = parse_money(cell).unwrap_err().to_string();
+            assert!(err.contains("not a finite number"), "{cell}: {err}");
+        }
+        assert_eq!(parse_money_lenient("nan"), 0.0);
+    }
+
+    #[test]
+    fn rejects_unbalanced_parentheses_instead_of_flipping_sign() {
+        for cell in ["(500", "500)", "($1,500", "1,500)"] {
+            let err = parse_money(cell).unwrap_err().to_string();
+            assert!(err.contains("unbalanced parentheses"), "{cell}: {err}");
+        }
+        assert_eq!(parse_money("(500)").unwrap(), -500.0);
     }
 
     #[test]
