@@ -4,6 +4,7 @@ pub mod migration;
 pub mod money;
 pub mod protocol;
 pub mod ratio;
+pub mod readiness;
 pub mod snapshot_metrics;
 pub mod store;
 pub mod t12;

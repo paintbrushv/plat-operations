@@ -87,6 +87,7 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
             "occupancy",
             "economic_occupancy",
             "delinquency",
+            "close_readiness",
             "t12"
         ]
     );
@@ -293,6 +294,11 @@ fn golden_inputs_agree_with_their_input_schemas() {
         (
             "list_revisions",
             json!({"property": "p", "period": "2026-05"}),
+        ),
+        ("close_readiness", json!({"period": "2026-05"})),
+        (
+            "close_readiness",
+            json!({"period": "2026-05", "property": "p"}),
         ),
         (
             "t12",

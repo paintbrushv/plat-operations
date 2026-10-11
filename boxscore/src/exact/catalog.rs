@@ -13,7 +13,9 @@
 //! existing value; a **major** bump may change a number for the same input.
 //! A consumer that pins `version` is refused rather than silently served a
 //! different one.
-use super::{digest, error, snapshot_metrics, store, t12, variance, ExactError, Result, CONTRACT};
+use super::{
+    digest, error, readiness, snapshot_metrics, store, t12, variance, ExactError, Result, CONTRACT,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -125,6 +127,14 @@ pub const CATALOG: &[Calculation] = &[
         stateful: false,
         input_schema: schemas::snapshot_metric_input,
         output_schema: schemas::delinquency_output,
+    },
+    Calculation {
+        name: "close_readiness",
+        version: "1.0.0",
+        summary: "Per-property close readiness for a period from the exact store: latest revision, account coverage, blocking review reasons, issued reports, and what the store does not track.",
+        stateful: true,
+        input_schema: readiness::input_schema,
+        output_schema: readiness::output_schema,
     },
     Calculation {
         name: "t12",
@@ -430,6 +440,7 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
             result["review_reasons"] = json!(review_reasons);
             Ok((status, result))
         }
+        "close_readiness" => readiness::execute(&call.input, database(calc, call)).await,
         "t12" => {
             let input: t12::Input = parse(&call.input)?;
             t12::run(database(calc, call)?, input).await
