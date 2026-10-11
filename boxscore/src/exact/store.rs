@@ -475,3 +475,53 @@ pub async fn issue(pool: &SqlitePool, id: &str) -> Result<Value> {
         .await?;
     Ok(result)
 }
+
+/// Stored revisions with their issued reports, oldest first. Read-only.
+pub async fn list_revisions(
+    pool: &SqlitePool,
+    property: Option<&str>,
+    period: Option<&str>,
+) -> Result<Vec<Value>> {
+    let rows = sqlx::query(
+        "SELECT id,property,period,revision,parent_id,reason,unit_count,input_sha256,sources,created_at \
+         FROM exact_revisions WHERE (?1 IS NULL OR property=?1) AND (?2 IS NULL OR period=?2) \
+         ORDER BY property,period,revision",
+    )
+    .bind(property)
+    .bind(period)
+    .fetch_all(pool)
+    .await?;
+    let mut revisions = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: String = row.try_get("id")?;
+        let reports = sqlx::query(
+            "SELECT id,body_sha256,created_at FROM exact_reports WHERE revision_id=? ORDER BY created_at,id",
+        )
+        .bind(&id)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|report| {
+            Ok(json!({
+                "id": report.try_get::<String, _>("id")?,
+                "body_sha256": report.try_get::<String, _>("body_sha256")?,
+                "created_at": report.try_get::<String, _>("created_at")?,
+            }))
+        })
+        .collect::<Result<Vec<Value>>>()?;
+        revisions.push(json!({
+            "id": id,
+            "property": row.try_get::<String, _>("property")?,
+            "period": row.try_get::<String, _>("period")?,
+            "revision": row.try_get::<i64, _>("revision")?,
+            "parent_id": row.try_get::<Option<String>, _>("parent_id")?,
+            "reason": row.try_get::<Option<String>, _>("reason")?,
+            "unit_count": row.try_get::<i64, _>("unit_count")?,
+            "input_sha256": row.try_get::<String, _>("input_sha256")?,
+            "sources": serde_json::from_str::<Value>(&row.try_get::<String, _>("sources")?)?,
+            "created_at": row.try_get::<String, _>("created_at")?,
+            "reports": reports,
+        }));
+    }
+    Ok(revisions)
+}

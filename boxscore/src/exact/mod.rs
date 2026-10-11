@@ -1,4 +1,5 @@
 //! Released USD operating calculations. Legacy floating-point features are separate.
+pub mod catalog;
 pub mod migration;
 pub mod money;
 pub mod protocol;
