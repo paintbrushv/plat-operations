@@ -109,3 +109,24 @@ fn matching_codes_tolerate_names_and_category_format_but_refuse_conflicts() {
         "ACCOUNT_MAPPING_CONFLICT"
     );
 }
+
+#[test]
+fn whitespace_padded_account_codes_refuse_instead_of_splitting_accounts() {
+    // A trailing space on one side's export must not create a phantom second
+    // account that reports a full actual and a full budget variance while the
+    // status stays "calculated".
+    let actuals = vec![line("4000", "rental income", "100.00")];
+    for padded in ["4000 ", " 4000", "\t4000"] {
+        let budgets = vec![line(padded, "rental income", "90.00")];
+        let refused = compute(&actuals, &budgets).unwrap_err();
+        assert_eq!(refused.code, "INVALID_INPUT");
+        assert!(refused.message.contains("whitespace"));
+        assert_eq!(
+            compute(&budgets, &actuals).unwrap_err().code,
+            "INVALID_INPUT"
+        );
+    }
+    let clean = compute(&actuals, &[line("4000", "rental income", "90.00")]).unwrap();
+    assert_eq!(clean.by_account.len(), 1);
+    assert_eq!(clean.noi_bridge["noi_variance"].to_string(), "10.00");
+}

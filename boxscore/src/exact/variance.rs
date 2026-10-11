@@ -46,6 +46,12 @@ pub fn compute(actuals: &[Line], budgets: &[Line]) -> Result<Variance> {
                     "Invalid account identity or category",
                 ));
             }
+            if row.account_code != row.account_code.trim() {
+                return Err(error(
+                    "INVALID_INPUT",
+                    "Account code has surrounding whitespace; normalize the export before import",
+                ));
+            }
             let category = row.category.trim().to_lowercase();
             let label = labels
                 .entry(row.account_code.clone())
