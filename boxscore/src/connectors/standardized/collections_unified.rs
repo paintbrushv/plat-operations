@@ -237,12 +237,13 @@ pub fn read_collections_snapshot(
         ) {
             snapshot.high_risk_units += 1;
         }
-        if let Some(idx) = on_time_idx {
-            let on_time = parse_amount(cell(&record, idx).unwrap_or_default());
-            if on_time > 0.0 {
-                on_time_total += on_time;
-                on_time_count += 1;
-            }
+        // Zero is a value ("never on time"); only a blank cell is missing.
+        if let Some(raw) = on_time_idx
+            .and_then(|idx| cell(&record, idx))
+            .filter(|value| !value.trim().is_empty())
+        {
+            on_time_total += parse_amount(raw);
+            on_time_count += 1;
         }
     }
     if on_time_count > 0 {
