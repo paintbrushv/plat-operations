@@ -43,6 +43,13 @@ enum Command {
         #[arg(long)]
         id: String,
     },
+    /// Serve the catalog as an MCP server: JSON-RPC 2.0, one message per line on
+    /// stdin/stdout, until stdin closes. `--database` is fixed for the session
+    /// and is never taken from a tool argument.
+    Mcp {
+        #[arg(long)]
+        database: Option<PathBuf>,
+    },
     /// Create a new exact-cent database; existing paths are refused.
     Init {
         #[arg(long)]
@@ -212,6 +219,10 @@ async fn run(command: Command) -> Result<Value> {
             };
             Ok(catalog::invoke(&call).await.to_value())
         }
+        Command::Mcp { .. } => Err(error(
+            "INTERNAL_ERROR",
+            "mcp is served by main, not as a one-shot command",
+        )),
         Command::Init { database } => {
             let pool = store::create(&database).await?;
             pool.close().await;
@@ -318,7 +329,16 @@ async fn run(command: Command) -> Result<Value> {
 #[tokio::main]
 async fn main() {
     // Intentionally no dotenv, tracing subscriber, HTTP server, or private legacy config.
-    let result = run(Cli::parse().command).await;
+    let command = Cli::parse().command;
+    if let Command::Mcp { database } = command {
+        // stdout belongs to JSON-RPC alone; nothing is printed after the session.
+        let code = match exact::mcp::run_stdio(database).await {
+            Ok(()) => 0,
+            Err(_) => 3,
+        };
+        std::process::exit(code);
+    }
+    let result = run(command).await;
     let (payload, code) = match result {
         Ok(v) => {
             // Catalog envelopes carry refusals inside the payload.
