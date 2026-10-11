@@ -148,15 +148,14 @@ async fn ingest_properties(
     task_run_id: &str,
     file: &Path,
 ) -> Result<IngestResult> {
-    let mut reader = crate::parse::csv_reader_from_path(file)?;
+    let rows = read_contract_rows::<PropertyRow>(file, "properties", PROPERTY_COLUMNS)?;
     let mut inserted = 0;
     let mut skipped = 0;
     let mut gaps = 0;
-    for (index, row) in reader.deserialize::<PropertyRow>().enumerate() {
-        let source_row = index as i64 + 2;
+    for (source_row, row) in rows {
         match row {
-            Ok(row) if required(&[&row.name, &row.market, &row.unit_count]) => {
-                let unit_count = match row.unit_count.parse::<i64>() {
+            row if required(&[&row.name, &row.market, &row.unit_count]) => {
+                let unit_count = match parse_unit_count(&row.unit_count) {
                     Ok(value) => value,
                     Err(err) => {
                         skipped += 1;
@@ -183,7 +182,7 @@ async fn ingest_properties(
                 .await?;
                 inserted += 1;
             }
-            Ok(row) => {
+            row => {
                 skipped += 1;
                 gaps += create_ingest_gap(
                     pool,
@@ -194,10 +193,6 @@ async fn ingest_properties(
                     &format!("Missing required property fields in row for {:?}", row.name),
                 )
                 .await?;
-            }
-            Err(err) => {
-                skipped += 1;
-                warn!(%err, source_row, "failed to parse property row");
             }
         }
     }
@@ -211,23 +206,50 @@ async fn ingest_gl(
     file: &Path,
     table: &str,
 ) -> Result<IngestResult> {
-    let mut reader = crate::parse::csv_reader_from_path(file)?;
+    let rows = read_contract_rows::<GlRow>(file, "gl", GL_COLUMNS)?;
+    // Validate every row that will be inserted before deleting anything, so
+    // a bad period or an unreviewed category never leaves a partial table.
+    for (source_row, row) in &rows {
+        if !required(&[
+            &row.property,
+            &row.period,
+            &row.account_code,
+            &row.account_name,
+            &row.category,
+            &row.amount,
+        ]) {
+            continue;
+        }
+        db::normalize_period_label(&row.period).with_context(|| {
+            format!(
+                "{} row {source_row}: period {:?} must be YYYY-MM",
+                file.display(),
+                row.period
+            )
+        })?;
+        if crate::ontology::canonical_category(&row.category).is_none() {
+            anyhow::bail!(
+                "{} row {source_row}: category {:?} is not a reviewed NOI category. Use one of [{}] or Unmapped; anything else would be summed into expenses silently",
+                file.display(),
+                row.category,
+                crate::ontology::NOI_CATEGORIES.join(", ")
+            );
+        }
+    }
     let mut inserted = 0;
     let mut skipped = 0;
     let mut gaps = 0;
     delete_prior_file_rows(pool, table, file).await?;
-    for (index, row) in reader.deserialize::<GlRow>().enumerate() {
-        let source_row = index as i64 + 2;
+    for (source_row, row) in rows {
         match row {
-            Ok(row)
-                if required(&[
-                    &row.property,
-                    &row.period,
-                    &row.account_code,
-                    &row.account_name,
-                    &row.category,
-                    &row.amount,
-                ]) =>
+            row if required(&[
+                &row.property,
+                &row.period,
+                &row.account_code,
+                &row.account_name,
+                &row.category,
+                &row.amount,
+            ]) =>
             {
                 let Some(property) = db::find_property_by_name(pool, row.property.trim()).await?
                 else {
@@ -244,6 +266,8 @@ async fn ingest_gl(
                     continue;
                 };
                 let period_id = db::upsert_period(pool, row.period.trim()).await?;
+                let category = crate::ontology::canonical_category(&row.category)
+                    .ok_or_else(|| anyhow::anyhow!("category validated above"))?;
                 let amount = match crate::parse::parse_money(&row.amount) {
                     Ok(value) => value,
                     Err(err) => {
@@ -268,7 +292,7 @@ async fn ingest_gl(
                 .bind(period_id)
                 .bind(row.account_code.trim())
                 .bind(row.account_name.trim())
-                .bind(row.category.trim())
+                .bind(category)
                 .bind(amount)
                 .bind(file.to_string_lossy().to_string())
                 .bind(source_row)
@@ -277,7 +301,7 @@ async fn ingest_gl(
                 .await?;
                 inserted += 1;
             }
-            Ok(row) => {
+            row => {
                 skipped += 1;
                 gaps += create_ingest_gap(
                     pool,
@@ -292,10 +316,6 @@ async fn ingest_gl(
                     &format!("Missing required GL fields for row {:?}", row.account_code),
                 )
                 .await?;
-            }
-            Err(err) => {
-                skipped += 1;
-                warn!(%err, source_row, table, "failed to parse GL row");
             }
         }
     }
@@ -317,15 +337,14 @@ async fn ingest_rent_roll(
     task_run_id: &str,
     file: &Path,
 ) -> Result<IngestResult> {
-    let mut reader = crate::parse::csv_reader_from_path(file)?;
+    let rows = read_contract_rows::<RentRollRow>(file, "rent_roll", RENT_ROLL_COLUMNS)?;
     let mut inserted = 0;
     let mut skipped = 0;
     let mut gaps = 0;
     delete_prior_file_rows(pool, "rent_roll_snapshots", file).await?;
-    for (index, row) in reader.deserialize::<RentRollRow>().enumerate() {
-        let source_row = index as i64 + 2;
+    for (source_row, row) in rows {
         match row {
-            Ok(row) if required(&[&row.property, &row.as_of_date]) => {
+            row if required(&[&row.property, &row.as_of_date]) => {
                 let Some(property) = db::find_property_by_name(pool, row.property.trim()).await?
                 else {
                     skipped += 1;
@@ -415,15 +434,14 @@ async fn ingest_delinquency(
     task_run_id: &str,
     file: &Path,
 ) -> Result<IngestResult> {
-    let mut reader = crate::parse::csv_reader_from_path(file)?;
+    let rows = read_contract_rows::<DelinquencyRow>(file, "delinquency", DELINQUENCY_COLUMNS)?;
     let mut inserted = 0;
     let mut skipped = 0;
     let mut gaps = 0;
     delete_prior_file_rows(pool, "delinquency_snapshots", file).await?;
-    for (index, row) in reader.deserialize::<DelinquencyRow>().enumerate() {
-        let source_row = index as i64 + 2;
+    for (source_row, row) in rows {
         match row {
-            Ok(row) if required(&[&row.property, &row.as_of_date]) => {
+            row if required(&[&row.property, &row.as_of_date]) => {
                 let Some(property) = db::find_property_by_name(pool, row.property.trim()).await?
                 else {
                     skipped += 1;
@@ -498,15 +516,14 @@ async fn ingest_delinquency(
 }
 
 async fn ingest_leasing(pool: &SqlitePool, task_run_id: &str, file: &Path) -> Result<IngestResult> {
-    let mut reader = crate::parse::csv_reader_from_path(file)?;
+    let rows = read_contract_rows::<LeasingRow>(file, "leasing", LEASING_COLUMNS)?;
     let mut inserted = 0;
     let mut skipped = 0;
     let mut gaps = 0;
     delete_prior_file_rows(pool, "leasing_snapshots", file).await?;
-    for (index, row) in reader.deserialize::<LeasingRow>().enumerate() {
-        let source_row = index as i64 + 2;
+    for (source_row, row) in rows {
         match row {
-            Ok(row) if required(&[&row.property, &row.as_of_date]) => {
+            row if required(&[&row.property, &row.as_of_date]) => {
                 let Some(property) = db::find_property_by_name(pool, row.property.trim()).await?
                 else {
                     skipped += 1;
@@ -685,6 +702,110 @@ fn required(fields: &[&str]) -> bool {
     fields.iter().all(|field| !field.trim().is_empty())
 }
 
+/// Column sets for the CSV contracts in `docs/DATA_CONTRACTS.md`.
+const PROPERTY_COLUMNS: &[&str] = &[
+    "name",
+    "market",
+    "unit_count",
+    "owner_entity",
+    "property_manager",
+];
+const GL_COLUMNS: &[&str] = &[
+    "property",
+    "period",
+    "account_code",
+    "account_name",
+    "category",
+    "amount",
+];
+const RENT_ROLL_COLUMNS: &[&str] = &[
+    "property",
+    "as_of_date",
+    "occupied_units",
+    "vacant_units",
+    "leased_units",
+    "notice_units",
+    "down_units",
+    "market_rent_total",
+    "in_place_rent_total",
+];
+const DELINQUENCY_COLUMNS: &[&str] = &[
+    "property",
+    "as_of_date",
+    "delinquent_amount",
+    "delinquent_units",
+    "prepaid_amount",
+];
+const LEASING_COLUMNS: &[&str] = &[
+    "property",
+    "as_of_date",
+    "leads",
+    "tours",
+    "applications",
+    "approvals",
+    "move_ins",
+    "move_outs",
+    "concessions_amount",
+];
+
+/// Read every row of a contract CSV before anything touches the database.
+///
+/// A renamed or missing column, a ragged row, or undecodable bytes refuses
+/// the whole file with the row number and the columns that were found, so a
+/// wrong-shaped export never "completes" with zero rows inserted and no gap.
+/// Value-level problems (unknown property, unparseable amount) are still
+/// recorded as gaps by the callers, row by row.
+fn read_contract_rows<T: serde::de::DeserializeOwned>(
+    file: &Path,
+    contract: &str,
+    required_columns: &[&str],
+) -> Result<Vec<(i64, T)>> {
+    let mut reader = crate::parse::csv_reader_from_path(file)?;
+    let headers: Vec<String> = reader
+        .headers()
+        .with_context(|| format!("cannot read headers from {}", file.display()))?
+        .iter()
+        .map(|h| h.trim().to_string())
+        .collect();
+    let missing: Vec<&str> = required_columns
+        .iter()
+        .copied()
+        .filter(|column| !headers.iter().any(|h| h == column))
+        .collect();
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "{} does not match the {contract} contract: missing column(s) [{}]; found [{}]. Expected header: {}",
+            file.display(),
+            missing.join(", "),
+            headers.join(", "),
+            required_columns.join(",")
+        );
+    }
+    let mut rows = Vec::new();
+    for (index, row) in reader.deserialize::<T>().enumerate() {
+        let source_row = index as i64 + 2;
+        let row = row.with_context(|| {
+            format!(
+                "{} row {source_row} does not match the {contract} contract",
+                file.display()
+            )
+        })?;
+        rows.push((source_row, row));
+    }
+    Ok(rows)
+}
+
+fn parse_unit_count(value: &str) -> Result<i64> {
+    let count = value
+        .trim()
+        .parse::<i64>()
+        .with_context(|| format!("unit_count {value:?} is not an integer"))?;
+    if count <= 0 {
+        anyhow::bail!("unit_count {value:?} must be a positive integer");
+    }
+    Ok(count)
+}
+
 fn parse_i64(value: &str, field: &str) -> Result<i64> {
     crate::parse::parse_count(value).with_context(|| format!("invalid {field}"))
 }
@@ -742,7 +863,8 @@ fn result(
 ///
 /// Expected columns (case-insensitive): `property_id`, `period`, `account_code`,
 /// `account_name`, `amount`.  Rows with a blank `period` or `account_code`, or
-/// an unparseable `amount`, are silently skipped.  The `property_id` column in
+/// an unparseable `amount`, are skipped with a warning; a malformed record or
+/// a period that is not `YYYY-MM` refuses the file.  The `property_id` column in
 /// the CSV is ignored — the caller passes `property_id` explicitly so the DB
 /// foreign-key is always resolved via `require_property_by_name`.
 ///
@@ -783,14 +905,14 @@ pub async fn ingest_monthly_actuals_csv(
 
     let mut count = 0usize;
 
-    for record in reader.records() {
-        let record = match record {
-            Ok(r) => r,
-            Err(err) => {
-                warn!(%err, "skipping malformed CSV record in monthly_actuals");
-                continue;
-            }
-        };
+    for (index, record) in reader.records().enumerate() {
+        let source_row = index as i64 + 2;
+        let record = record.with_context(|| {
+            format!(
+                "{} row {source_row} is malformed (ragged or undecodable)",
+                file.display()
+            )
+        })?;
 
         let period = record.get(idx_period).unwrap_or("").trim().to_string();
         let account_code = record
@@ -802,6 +924,13 @@ pub async fn ingest_monthly_actuals_csv(
         if period.is_empty() || account_code.is_empty() {
             continue;
         }
+        // Store the canonical YYYY-MM label so T12 lookups find the row.
+        let period = db::normalize_period_label(&period).with_context(|| {
+            format!(
+                "{} row {source_row}: period {period:?} must be YYYY-MM",
+                file.display()
+            )
+        })?;
 
         let amount_str = record.get(idx_amount).unwrap_or("").trim();
         let amount = match crate::parse::parse_money(amount_str) {
