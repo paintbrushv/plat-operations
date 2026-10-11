@@ -519,3 +519,62 @@ async fn describe_lists_nine_functions_with_the_new_ones_stateless() {
         assert_eq!(entry["output_schema"]["type"], "object");
     }
 }
+
+#[tokio::test]
+async fn tampered_stored_snapshot_refuses_with_integrity_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("exact.sqlite");
+    let pool = store::create(&path).await.unwrap();
+    let revision = store::import(
+        &pool,
+        &dataset("2026-05", Some(stored_snapshot())),
+        None,
+        None,
+        &json!({"synthetic": "hash"}),
+    )
+    .await
+    .unwrap();
+
+    // Before tampering, the revision is served.
+    let before = catalog::invoke(&call(
+        "occupancy",
+        json!({"revision_id": revision}),
+        Some(&path),
+    ))
+    .await;
+    assert_eq!(before.status, "review_required", "{:?}", before.error);
+
+    // Stored rows are immutable by trigger; a hostile or corrupting writer
+    // has to remove the trigger first.
+    sqlx::query("DROP TRIGGER exact_snapshots_no_UPDATE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE exact_snapshots SET occupied_units = occupied_units - 1 WHERE revision_id = ?",
+    )
+    .bind(&revision)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    for function in [
+        "occupancy",
+        "economic_occupancy",
+        "delinquency",
+        "review_period",
+    ] {
+        let envelope = catalog::invoke(&call(
+            function,
+            json!({"revision_id": revision}),
+            Some(&path),
+        ))
+        .await;
+        assert_eq!(code(&envelope), "INTEGRITY_ERROR", "{function}");
+        assert_eq!(
+            envelope.error.unwrap()["message"],
+            "Stored period no longer matches its input hash"
+        );
+    }
+}

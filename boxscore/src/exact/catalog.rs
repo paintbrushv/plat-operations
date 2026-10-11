@@ -447,7 +447,7 @@ async fn metric_snapshot(
                 .as_deref()
                 .ok_or_else(|| database_required(calc))?;
             let pool = store::open(path, true).await?;
-            let outcome = store::load(&pool, &revision_id).await;
+            let outcome = store::load_verified(&pool, &revision_id).await;
             pool.close().await;
             let dataset = outcome?;
             let snapshot = dataset.snapshot.ok_or_else(|| {
