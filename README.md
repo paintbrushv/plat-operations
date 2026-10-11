@@ -12,6 +12,21 @@ and natural-language answers.
 It behaves like a sharp, skeptical multifamily asset-management analyst — **not** a
 chatbot, a dashboard toy, or a reporting generator.
 
+## Run it without a toolchain
+
+The exact-cent producer (`boxscore-exact`, including its MCP stdio server) is
+packaged as a container image: one binary on a distroless base, non-root, no
+shell, nothing listening, no network needed.
+
+```bash
+docker run --rm ghcr.io/paintbrushv/plat-operations:0.1.1   # prints the calculation catalog
+```
+
+[docs/INSTALL.md](docs/INSTALL.md) has the `init` / `import-csv` / `review` /
+`mcp` commands and a Claude Desktop configuration;
+[docs/DATA_FLOW.md](docs/DATA_FLOW.md) is the data-flow description for IT
+review.
+
 ## What's in this repository
 
 | Path | Contents |

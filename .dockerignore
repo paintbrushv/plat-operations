@@ -1,0 +1,23 @@
+# Allowlist: the image build needs the crate manifest, its lockfile, the Rust
+# sources and the SQL migrations the library embeds at compile time. Nothing
+# else enters the build context, so local databases, .env files, build output,
+# git metadata, agent worktrees (.claude/), sample data and docs cannot be
+# baked into the image by accident.
+*
+!boxscore/Cargo.toml
+!boxscore/Cargo.lock
+!boxscore/src/
+!boxscore/migrations/
+
+# Defence in depth inside the allowed paths (later rules win).
+**/target/
+**/.git/
+**/.claude/
+**/.env
+**/.env.*
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+**/data/
+**/*.jsonl

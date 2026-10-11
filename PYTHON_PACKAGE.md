@@ -16,5 +16,9 @@ with Python 3.11/3.12 clean-install verification. Only passing artifacts are
 eligible for publication. This candidate has not yet been published.
 Source builds require Rust and use the included Cargo.lock.
 
-See [exact workflow and migration](docs/EXACT_CENTS.md). The code and package
+See [exact workflow and migration](docs/EXACT_CENTS.md). To run the same
+command without Python or Rust, use the container image: see
+[Docker install](https://github.com/paintbrushv/plat-operations/blob/main/docs/INSTALL.md)
+and the [data-flow description](https://github.com/paintbrushv/plat-operations/blob/main/docs/DATA_FLOW.md)
+for IT review. The code and package
 metadata use the repository's existing Apache-2.0 license.
