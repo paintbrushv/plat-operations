@@ -83,7 +83,10 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
             "import_period",
             "review_period",
             "issue_report",
-            "list_revisions"
+            "list_revisions",
+            "occupancy",
+            "economic_occupancy",
+            "delinquency"
         ]
     );
     for entry in result["calculations"].as_array().unwrap() {
@@ -291,6 +294,14 @@ fn golden_inputs_agree_with_their_input_schemas() {
             json!({"property": "p", "period": "2026-05"}),
         ),
     ];
+    // The snapshot metrics take either a stored revision or an inline
+    // snapshot; each form is a golden input against the same schema.
+    let snapshot = dataset("1.00")["snapshot"].clone();
+    let mut goldens = goldens;
+    for name in ["occupancy", "economic_occupancy", "delinquency"] {
+        goldens.push((name, json!({"revision_id": "r1"})));
+        goldens.push((name, json!({"snapshot": snapshot, "unit_count": 10})));
+    }
     for (name, input) in goldens {
         let calc = catalog::find(name, None).unwrap();
         let schema = calc.input_schema();
@@ -302,6 +313,35 @@ fn golden_inputs_agree_with_their_input_schemas() {
         for required in schema["required"].as_array().into_iter().flatten() {
             let key = required.as_str().unwrap();
             assert!(input.get(key).is_some(), "{name}: required {key} missing");
+        }
+        // Each oneOf branch must be satisfiable by exactly the golden inputs
+        // that use its keys, and the nested snapshot keys must be known.
+        if let Some(branches) = schema["oneOf"].as_array() {
+            let matching = branches
+                .iter()
+                .filter(|branch| {
+                    let present = |k: &str| input.get(k).is_some();
+                    let required_ok = branch["required"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .all(|k| present(k.as_str().unwrap()));
+                    let forbidden_ok = branch["properties"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .filter(|(_, v)| **v == json!(false))
+                        .all(|(k, _)| !present(k));
+                    required_ok && forbidden_ok
+                })
+                .count();
+            assert_eq!(matching, 1, "{name}: {input} must match exactly one form");
+            if let Some(inline) = input.get("snapshot") {
+                let snapshot_properties = properties["snapshot"]["properties"].as_object().unwrap();
+                for key in inline.as_object().unwrap().keys() {
+                    assert!(snapshot_properties.contains_key(key), "snapshot.{key}");
+                }
+            }
         }
         // Nested dataset keys are checked the same way.
         if name == "import_period" {

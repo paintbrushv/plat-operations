@@ -3,6 +3,8 @@ pub mod catalog;
 pub mod migration;
 pub mod money;
 pub mod protocol;
+pub mod ratio;
+pub mod snapshot_metrics;
 pub mod store;
 pub mod variance;
 

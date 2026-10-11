@@ -40,6 +40,33 @@ pub struct Dataset {
     pub snapshot: Option<Snapshot>,
 }
 
+impl Snapshot {
+    /// Rules a snapshot must satisfy on its own: a canonical calendar date and
+    /// non-negative counts that reconcile to `unit_count`. [`Dataset::validate`]
+    /// adds the check that the date falls inside the dataset's period.
+    pub fn validate(&self, unit_count: i64) -> Result<()> {
+        let day = NaiveDate::parse_from_str(&self.as_of_date, "%Y-%m-%d")
+            .map_err(|_| error("INVALID_INPUT", "Invalid snapshot date"))?;
+        if day.format("%Y-%m-%d").to_string() != self.as_of_date {
+            return Err(error("INVALID_INPUT", "Use a canonical snapshot date"));
+        }
+        let counts = [self.occupied_units, self.vacant_units, self.down_units];
+        if counts.iter().any(|n| *n < 0 || *n > unit_count)
+            || counts.iter().try_fold(0_i64, |sum, n| sum.checked_add(*n)) != Some(unit_count)
+        {
+            return Err(snapshot_mismatch());
+        }
+        Ok(())
+    }
+}
+
+fn snapshot_mismatch() -> super::ExactError {
+    error(
+        "SNAPSHOT_MISMATCH",
+        "Snapshot must cover this period and reconcile to the property unit count",
+    )
+}
+
 impl Dataset {
     pub fn validate(&self) -> Result<()> {
         if self.property.trim().is_empty()
@@ -59,20 +86,9 @@ impl Dataset {
             return Err(error("INVALID_INPUT", "Period must use YYYY-MM"));
         }
         if let Some(s) = &self.snapshot {
-            let day = NaiveDate::parse_from_str(&s.as_of_date, "%Y-%m-%d")
-                .map_err(|_| error("INVALID_INPUT", "Invalid snapshot date"))?;
-            if day.format("%Y-%m-%d").to_string() != s.as_of_date {
-                return Err(error("INVALID_INPUT", "Use a canonical snapshot date"));
-            }
-            let counts = [s.occupied_units, s.vacant_units, s.down_units];
-            if !s.as_of_date.starts_with(&format!("{}-", self.period))
-                || counts.iter().any(|n| *n < 0 || *n > self.unit_count)
-                || counts.iter().sum::<i64>() != self.unit_count
-            {
-                return Err(error(
-                    "SNAPSHOT_MISMATCH",
-                    "Snapshot must cover this period and reconcile to the property unit count",
-                ));
+            s.validate(self.unit_count)?;
+            if !s.as_of_date.starts_with(&format!("{}-", self.period)) {
+                return Err(snapshot_mismatch());
             }
         }
         variance::compute(&self.actuals, &self.budgets)?;
