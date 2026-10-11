@@ -400,3 +400,113 @@ fn resident_payee_detection() {
     assert!(!is_resident_payee("")); // empty
     assert!(!is_resident_payee("()")); // no 't'
 }
+
+// ---------------------------------------------------------------------------
+// Amount column types: a ledger written with an INT64 or string amount must
+// not be stored as $0.00 for every row.
+// ---------------------------------------------------------------------------
+
+mod amount_types {
+    use super::*;
+    use parquet::{
+        data_type::{ByteArray, ByteArrayType, Int64Type},
+        file::{properties::WriterProperties, writer::SerializedFileWriter},
+        schema::parser::parse_message_type,
+    };
+    use std::sync::Arc;
+
+    /// Write a one-row gl_transactions.parquet whose `amount` column has the
+    /// given parquet type (`int64` or `binary (UTF8)`), returning the lane.
+    fn lane_with_amount_type(amount_type: &str) -> (tempfile::TempDir, PropertyLane) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir = temp_dir.path().to_path_buf();
+        let schema = Arc::new(
+            parse_message_type(&format!(
+                "message gl {{
+                    required int64 period (TIMESTAMP(MICROS,true));
+                    required binary property_id (UTF8);
+                    required binary account_code (UTF8);
+                    required {amount_type} amount;
+                }}"
+            ))
+            .unwrap(),
+        );
+        let file = std::fs::File::create(dir.join("gl_transactions.parquet")).unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file, schema, Arc::new(WriterProperties::default())).unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        // 2026-06-01T00:00:00Z in microseconds.
+        let period_micros = 1_780_272_000_000_000_i64;
+        let mut col = group.next_column().unwrap().unwrap();
+        col.typed::<Int64Type>()
+            .write_batch(&[period_micros], None, None)
+            .unwrap();
+        col.close().unwrap();
+        for text in ["p101", "5200"] {
+            let mut col = group.next_column().unwrap().unwrap();
+            col.typed::<ByteArrayType>()
+                .write_batch(&[ByteArray::from(text)], None, None)
+                .unwrap();
+            col.close().unwrap();
+        }
+        let mut col = group.next_column().unwrap().unwrap();
+        if amount_type == "int64" {
+            col.typed::<Int64Type>()
+                .write_batch(&[1234], None, None)
+                .unwrap();
+        } else {
+            col.typed::<ByteArrayType>()
+                .write_batch(&[ByteArray::from("1234.00")], None, None)
+                .unwrap();
+        }
+        col.close().unwrap();
+        group.close().unwrap();
+        writer.close().unwrap();
+        let lane = PropertyLane {
+            property_key: "maplewood".to_string(),
+            display_name: "Maplewood Commons".to_string(),
+            standardized_path: dir.clone(),
+            raw_data_path: dir.clone(),
+            root_path: dir,
+            primary_property_ids: vec!["p101".to_string()],
+            unit_count_hint: Some(494),
+        };
+        (temp_dir, lane)
+    }
+
+    #[tokio::test]
+    async fn int64_amount_is_stored_not_zeroed() {
+        let pool = db::connect("sqlite::memory:").await.unwrap();
+        db::init_database(&pool).await.unwrap();
+        let (_guard, lane) = lane_with_amount_type("int64");
+        let summary = ingest_gl_transactions_for_lane(&pool, &lane, None)
+            .await
+            .unwrap();
+        assert_eq!((summary.rows_inserted, summary.rows_skipped), (1, 0));
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM gl_transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(amount, 1234.0);
+    }
+
+    #[tokio::test]
+    async fn string_amount_refuses_the_file_instead_of_storing_zero() {
+        let pool = db::connect("sqlite::memory:").await.unwrap();
+        db::init_database(&pool).await.unwrap();
+        let (_guard, lane) = lane_with_amount_type("binary");
+        let err = ingest_gl_transactions_for_lane(&pool, &lane, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("\"amount\"") && err.contains("unsupported parquet type"),
+            "{err}"
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gl_transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+}

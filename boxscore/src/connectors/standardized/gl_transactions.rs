@@ -60,6 +60,24 @@ pub async fn ingest_gl_transactions_for_lane(
         .with_context(|| format!("failed to open GL transactions parquet: {}", path.display()))?;
     let reader = SerializedFileReader::new(file)
         .with_context(|| format!("failed to parse parquet file: {}", path.display()))?;
+    // Refuse a file that cannot carry an amount at all, rather than storing
+    // every transaction as $0.00.
+    let columns: Vec<&str> = reader
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .map(|c| c.name())
+        .collect();
+    if !columns.contains(&"amount") && !(columns.contains(&"debit") || columns.contains(&"credit"))
+    {
+        anyhow::bail!(
+            "{} has no amount, debit or credit column; found [{}]",
+            path.display(),
+            columns.join(", ")
+        );
+    }
     let row_iter = reader
         .get_row_iter(None)
         .with_context(|| "failed to create row iterator")?;
@@ -195,17 +213,13 @@ pub async fn ingest_gl_transactions_for_lane(
         };
 
         // --- amount (use `amount` column; fall back to debit-credit) ---------
-        let amount = match fields.get("amount") {
-            Some(Field::Double(v)) if v.is_finite() => *v,
-            _ => {
-                let debit = match fields.get("debit") {
-                    Some(Field::Double(v)) => *v,
-                    _ => 0.0,
-                };
-                let credit = match fields.get("credit") {
-                    Some(Field::Double(v)) => *v,
-                    _ => 0.0,
-                };
+        // Any numeric parquet type is accepted; a non-numeric or non-finite
+        // amount refuses the file instead of silently becoming $0.00.
+        let amount = match numeric_field(&fields, "amount", source_row)? {
+            Some(value) => value,
+            None => {
+                let debit = numeric_field(&fields, "debit", source_row)?.unwrap_or(0.0);
+                let credit = numeric_field(&fields, "credit", source_row)?.unwrap_or(0.0);
                 debit - credit
             }
         };
@@ -390,6 +404,40 @@ fn epoch_secs_to_ymd(secs: i64) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Returns true when the payee string ends with the pattern `(t<digits>)`.
+/// Read a money column from a parquet row by name.
+///
+/// `Ok(None)` means the column is absent or null for this row. Every numeric
+/// physical type is converted; a string, boolean, bytes or non-finite value
+/// is an error naming the row, the column and the type seen, because the
+/// alternative (treating it as zero) stores a ledger of $0.00 transactions
+/// with no warning.
+fn numeric_field(
+    fields: &HashMap<&str, &Field>,
+    name: &str,
+    source_row: i64,
+) -> Result<Option<f64>> {
+    let value = match fields.get(name) {
+        None | Some(Field::Null) => return Ok(None),
+        Some(Field::Double(v)) => *v,
+        Some(Field::Float(v)) => f64::from(*v),
+        Some(Field::Int(v)) => f64::from(*v),
+        Some(Field::Long(v)) => *v as f64,
+        Some(Field::Short(v)) => f64::from(*v),
+        Some(Field::Byte(v)) => f64::from(*v),
+        Some(Field::UInt(v)) => f64::from(*v),
+        Some(Field::ULong(v)) => *v as f64,
+        Some(Field::UShort(v)) => f64::from(*v),
+        Some(Field::UByte(v)) => f64::from(*v),
+        Some(other) => anyhow::bail!(
+            "row {source_row}: column {name:?} has unsupported parquet type for money (value {other}); expected a numeric column"
+        ),
+    };
+    if !value.is_finite() {
+        anyhow::bail!("row {source_row}: column {name:?} is not a finite number");
+    }
+    Ok(Some(value))
+}
+
 /// This is Yardi's tenant-ledger marker (e.g. `Holder (t0171778)`).
 ///
 /// Implemented without a regex crate: hand-rolled suffix check.
