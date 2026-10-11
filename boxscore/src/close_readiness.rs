@@ -101,7 +101,10 @@ pub async fn assess_portfolio(
     pool: &SqlitePool,
     period: &str,
 ) -> Result<(CloseReadinessSummary, Vec<PropertyCloseReadiness>)> {
-    validate_period(period)?;
+    // Feed queries compare against `periods.label`, which is always YYYY-MM;
+    // an unnormalized "2026-6" previously reported every feed as missing.
+    let period = db::normalize_period_label(period)?;
+    let period = period.as_str();
     let properties = db::list_properties(pool).await?;
     let mut readiness = Vec::new();
     for property in properties {
@@ -116,6 +119,8 @@ pub async fn assess_close_readiness(
     period: &str,
     report_dir: &Path,
 ) -> Result<CloseReadinessResult> {
+    let period = db::normalize_period_label(period)?;
+    let period = period.as_str();
     let (summary, readiness) = assess_portfolio(pool, period).await?;
 
     // Persist any data-contract ERRORs found by the hard gate into the learning
@@ -671,10 +676,6 @@ fn feed_status_label(status: &FeedStatus) -> &'static str {
         FeedStatus::Stale => "stale",
         FeedStatus::Missing => "missing",
     }
-}
-
-fn validate_period(period: &str) -> Result<()> {
-    db::parse_period_label(period).map(|_| ())
 }
 
 fn period_label(period: &str) -> String {
