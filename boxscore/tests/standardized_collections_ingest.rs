@@ -35,6 +35,22 @@ fn collections_parser_aggregates_without_retaining_resident_pii() {
         .contains("Resident A"));
 }
 
+#[test]
+fn collections_on_time_average_counts_zero_rows_and_skips_blank_cells() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file = temp_dir.path().join("collections_unified.csv");
+    // 1.00, 0.00 and a blank: the average is 0.50 over the two stated values,
+    // not 1.00 (which is what dropping the zero produced before).
+    std::fs::write(
+        &file,
+        "property_id,unit,resident_code,resident_name,on_time_pct,snapshot_date\np101,A101,R-A,Resident A,1.00,2026-06-09\np101,A102,R-B,Resident B,0.00,2026-06-09\np101,A103,R-C,Resident C,,2026-06-09\n",
+    )
+    .unwrap();
+    let snapshot = read_collections_snapshot(&file, "2026-06-09").unwrap();
+    assert_eq!(snapshot.rows_seen, 3);
+    assert_eq!(snapshot.avg_on_time_pct, 0.5);
+}
+
 #[tokio::test]
 async fn collections_ingest_persists_aggregate_snapshot_and_evidence_without_pii() {
     let pool = db::connect("sqlite::memory:").await.unwrap();
