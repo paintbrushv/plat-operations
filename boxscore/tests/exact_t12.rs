@@ -527,19 +527,51 @@ async fn rows_are_ordered_and_unmapped_is_kept_out_of_noi() {
             "Payroll",
             "Taxes",
             "landscaping",
-            "unmapped",
+            "Unmapped",
             "zebra"
         ]
     );
     assert_eq!(row(actuals, "landscaping")["class"], "expense");
-    assert_eq!(row(actuals, "unmapped")["class"], "unmapped");
+    assert_eq!(row(actuals, "Unmapped")["class"], "unmapped");
     assert_eq!(row(actuals, "Concessions")["values"][11], "-20.00");
     // NOI = revenue - expenses, with unmapped excluded and reported apart.
     let revenue = 100_000 - 2_000 + 1_000;
     let expenses = 30_000 + 5_000 + 600 + 700;
     assert_eq!(actuals["noi"][11], dollars(revenue - expenses));
     assert_eq!(actuals["unmapped"][11], "123.45");
+    // A nonzero unmapped total is a review reason alongside the missing months.
+    assert_eq!(
+        out["review_reasons"],
+        json!(["missing_periods", "unmapped_accounts"])
+    );
     assert!(actuals["noi"][0].is_null());
+}
+
+#[tokio::test]
+async fn nonzero_unmapped_alone_requires_review() {
+    let fx = Fixture::new().await;
+    for (i, period) in PERIODS.iter().enumerate() {
+        let mut data = month(PROPERTY, period, i as i64, true);
+        match i {
+            4 => data
+                .actuals
+                .push(serde_json::from_value(line("8000", "Unmapped", 250)).unwrap()),
+            // A zero unmapped total is not a reason.
+            7 => data
+                .actuals
+                .push(serde_json::from_value(line("8000", "unmapped", 0)).unwrap()),
+            _ => {}
+        }
+        fx.import(&data).await;
+    }
+    let envelope = fx.t12(ask()).await;
+    assert_eq!(envelope.status, "review_required");
+    let out = result(&envelope);
+    assert_eq!(out["review_reasons"], json!(["unmapped_accounts"]));
+    assert_eq!(out["missing_periods"], json!([]));
+    assert_eq!(out["actuals"]["unmapped"][4], "2.50");
+    assert_eq!(out["actuals"]["noi"][4], dollars(67_000 + 996 * 4));
+    assert_eq!(row(&out["actuals"], "Unmapped")["total"], "2.50");
 }
 
 #[tokio::test]
