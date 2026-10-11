@@ -13,7 +13,7 @@
 //! existing value; a **major** bump may change a number for the same input.
 //! A consumer that pins `version` is refused rather than silently served a
 //! different one.
-use super::{digest, error, store, variance, ExactError, Result, CONTRACT};
+use super::{digest, error, snapshot_metrics, store, variance, ExactError, Result, CONTRACT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -101,6 +101,30 @@ pub const CATALOG: &[Calculation] = &[
         stateful: true,
         input_schema: schemas::list_revisions_input,
         output_schema: schemas::list_revisions_output,
+    },
+    Calculation {
+        name: "occupancy",
+        version: "1.0.0",
+        summary: "Physical occupancy (occupied over total units) from a stored revision's snapshot or an inline snapshot, as an exact four-place ratio.",
+        stateful: false,
+        input_schema: schemas::snapshot_metric_input,
+        output_schema: schemas::occupancy_output,
+    },
+    Calculation {
+        name: "economic_occupancy",
+        version: "1.0.0",
+        summary: "Economic occupancy (in-place over market rent) from a stored revision's snapshot or an inline snapshot, as an exact four-place ratio of cents.",
+        stateful: false,
+        input_schema: schemas::snapshot_metric_input,
+        output_schema: schemas::economic_occupancy_output,
+    },
+    Calculation {
+        name: "delinquency",
+        version: "1.0.0",
+        summary: "Delinquent and prepaid balances, their net, and each as a share of in-place rent, from a stored revision's snapshot or an inline snapshot.",
+        stateful: false,
+        input_schema: schemas::snapshot_metric_input,
+        output_schema: schemas::delinquency_output,
     },
 ];
 
@@ -272,6 +296,20 @@ struct ListRevisionsInput {
     period: Option<String>,
 }
 
+/// Exactly one of `revision_id` (read the stored revision's snapshot; needs
+/// a host-supplied database) or `snapshot` with `unit_count` (inline, no
+/// database).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotMetricInput {
+    #[serde(default)]
+    revision_id: Option<String>,
+    #[serde(default)]
+    snapshot: Option<store::Snapshot>,
+    #[serde(default)]
+    unit_count: Option<i64>,
+}
+
 fn parse<T: serde::de::DeserializeOwned>(input: &Value) -> Result<T> {
     serde_json::from_value(input.clone()).map_err(|e| {
         error(
@@ -367,6 +405,23 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
             pool.close().await;
             Ok(("calculated", json!({"revisions": outcome?})))
         }
+        "occupancy" | "economic_occupancy" | "delinquency" => {
+            let input: SnapshotMetricInput = parse(&call.input)?;
+            let (snapshot, unit_count) = metric_snapshot(calc, call, input).await?;
+            let (result, review_reasons) = match calc.name {
+                "occupancy" => snapshot_metrics::occupancy(&snapshot, unit_count)?,
+                "economic_occupancy" => snapshot_metrics::economic_occupancy(&snapshot)?,
+                _ => snapshot_metrics::delinquency(&snapshot)?,
+            };
+            let status = if review_reasons.is_empty() {
+                "calculated"
+            } else {
+                "review_required"
+            };
+            let mut result = result;
+            result["review_reasons"] = json!(review_reasons);
+            Ok((status, result))
+        }
         other => Err(error(
             "INTERNAL_ERROR",
             format!("Catalog entry {other} has no implementation"),
@@ -374,17 +429,69 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
     }
 }
 
+/// Resolve the snapshot and unit count a snapshot metric runs over, from
+/// either input form, and validate the snapshot the same way an import does.
+async fn metric_snapshot(
+    calc: &Calculation,
+    call: &Call,
+    input: SnapshotMetricInput,
+) -> Result<(store::Snapshot, i64)> {
+    let (snapshot, unit_count) = match input {
+        SnapshotMetricInput {
+            revision_id: Some(revision_id),
+            snapshot: None,
+            unit_count: None,
+        } => {
+            let path = call
+                .database
+                .as_deref()
+                .ok_or_else(|| database_required(calc))?;
+            let pool = store::open(path, true).await?;
+            let outcome = store::load(&pool, &revision_id).await;
+            pool.close().await;
+            let dataset = outcome?;
+            let snapshot = dataset.snapshot.ok_or_else(|| {
+                error(
+                    "MISSING_OCCUPANCY_SNAPSHOT",
+                    "The revision has no occupancy snapshot",
+                )
+            })?;
+            (snapshot, dataset.unit_count)
+        }
+        SnapshotMetricInput {
+            revision_id: None,
+            snapshot: Some(snapshot),
+            unit_count: Some(unit_count),
+        } => (snapshot, unit_count),
+        _ => {
+            return Err(error(
+                "INVALID_INPUT",
+                "Give exactly one of revision_id, or snapshot together with unit_count",
+            ))
+        }
+    };
+    if !(1..=10_000_000).contains(&unit_count) {
+        return Err(error("INVALID_INPUT", "Require a credible unit count"));
+    }
+    snapshot.validate(unit_count)?;
+    Ok((snapshot, unit_count))
+}
+
 fn database<'a>(calc: &Calculation, call: &'a Call) -> Result<&'a std::path::Path> {
     debug_assert!(calc.stateful);
-    call.database.as_deref().ok_or_else(|| {
-        ExactError {
-            code: "DATABASE_REQUIRED",
-            message: format!(
-                "{} needs an exact-cent database; the host supplies it (`boxscore-exact call --database`), never the input",
-                calc.name
-            ),
-        }
-    })
+    call.database
+        .as_deref()
+        .ok_or_else(|| database_required(calc))
+}
+
+fn database_required(calc: &Calculation) -> ExactError {
+    ExactError {
+        code: "DATABASE_REQUIRED",
+        message: format!(
+            "{} needs an exact-cent database; the host supplies it (`boxscore-exact call --database`), never the input",
+            calc.name
+        ),
+    }
 }
 
 /// Hand-written JSON Schema (draft 2020-12) for every catalog function.
@@ -599,6 +706,110 @@ pub mod schemas {
         schema["properties"]["report_id"] = json!({"type": "string"});
         schema["properties"]["issued_at"] = json!({"type": "string"});
         schema
+    }
+    fn ratio() -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["numerator", "denominator", "decimal", "scale"],
+            "properties": {
+                "numerator": {"type": "string", "pattern": "^-?[0-9]+$"},
+                "denominator": {"type": "string", "pattern": "^-?[0-9]+$"},
+                "decimal": {"type": "string", "pattern": "^-?[0-9]+\\.[0-9]{4}$",
+                            "description": "numerator / denominator rounded half away from zero to four places, in integer arithmetic"},
+                "scale": {"const": 4}
+            }
+        })
+    }
+    fn optional_ratio() -> Value {
+        json!({"anyOf": [ratio(), {"type": "null"}]})
+    }
+    fn snapshot_metric_output(required: &[&str], properties: Vec<(&str, Value)>) -> Value {
+        let mut required: Vec<Value> = required.iter().map(|k| json!(k)).collect();
+        required.extend([json!("as_of_date"), json!("review_reasons")]);
+        let mut schema = json!({
+            "$schema": DRAFT, "type": "object", "required": required,
+            "properties": {
+                "as_of_date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                "review_reasons": {"type": "array", "items": {"type": "string"}}
+            }
+        });
+        for (key, value) in properties {
+            schema["properties"][key] = value;
+        }
+        schema
+    }
+    /// Either a stored revision (needs the host's database) or an inline
+    /// snapshot with its unit count; never both.
+    pub fn snapshot_metric_input() -> Value {
+        json!({
+            "$schema": DRAFT, "type": "object", "additionalProperties": false,
+            "properties": {
+                "revision_id": {"type": "string", "description": "Use the snapshot stored with this revision; needs the host-supplied database"},
+                "snapshot": snapshot(),
+                "unit_count": {"type": "integer", "minimum": 1, "maximum": 10000000,
+                               "description": "Total units; occupied, vacant and down units must sum to it"}
+            },
+            "oneOf": [
+                {"required": ["revision_id"],
+                 "properties": {"snapshot": false, "unit_count": false}},
+                {"required": ["snapshot", "unit_count"],
+                 "properties": {"revision_id": false}}
+            ]
+        })
+    }
+    pub fn occupancy_output() -> Value {
+        let count = json!({"type": "integer", "minimum": 0});
+        snapshot_metric_output(
+            &[
+                "unit_count",
+                "occupied_units",
+                "vacant_units",
+                "down_units",
+                "occupancy",
+            ],
+            vec![
+                ("unit_count", json!({"type": "integer", "minimum": 1})),
+                ("occupied_units", count.clone()),
+                ("vacant_units", count.clone()),
+                ("down_units", count),
+                ("occupancy", ratio()),
+            ],
+        )
+    }
+    pub fn economic_occupancy_output() -> Value {
+        snapshot_metric_output(
+            &[
+                "market_rent_total",
+                "in_place_rent_total",
+                "economic_occupancy",
+            ],
+            vec![
+                ("market_rent_total", money()),
+                ("in_place_rent_total", money()),
+                ("economic_occupancy", ratio()),
+            ],
+        )
+    }
+    pub fn delinquency_output() -> Value {
+        snapshot_metric_output(
+            &[
+                "delinquent_amount",
+                "prepaid_amount",
+                "net",
+                "in_place_rent_total",
+                "delinquent_share_of_in_place_rent",
+                "prepaid_share_of_in_place_rent",
+            ],
+            vec![
+                ("delinquent_amount", money()),
+                ("prepaid_amount", optional_money()),
+                ("net", optional_money()),
+                ("in_place_rent_total", optional_money()),
+                ("delinquent_share_of_in_place_rent", optional_ratio()),
+                ("prepaid_share_of_in_place_rent", optional_ratio()),
+            ],
+        )
     }
     pub fn list_revisions_input() -> Value {
         json!({

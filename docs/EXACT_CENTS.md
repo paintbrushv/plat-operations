@@ -94,6 +94,17 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 | `review_period@1.0.0` | yes | the same body as `review` |
 | `issue_report@1.0.0` | yes | the same body as `issue` |
 | `list_revisions@1.0.0` | yes | stored revisions and their issued reports |
+| `occupancy@1.0.0` | no | occupied units over unit count as a ratio, with the unit counts and `down_units_present` review reason |
+| `economic_occupancy@1.0.0` | no | in-place rent over market rent as a ratio, both totals echoed; refuses `MISSING_MARKET_RENT`, `MISSING_IN_PLACE_RENT`, `ZERO_DENOMINATOR` |
+| `delinquency@1.0.0` | no | delinquent, prepaid and net balances, each as a share of in-place rent; refuses `MISSING_DELINQUENCY` |
+
+The last three take exactly one of `{"revision_id": "..."}` or
+`{"snapshot": {...}, "unit_count": N}`. They are not stateful: with an inline
+snapshot they never open a database. With `revision_id` the host must supply
+`--database` (otherwise `DATABASE_REQUIRED`) and the stored revision must have
+a snapshot (otherwise `MISSING_OCCUPANCY_SNAPSHOT`). An inline snapshot is
+validated like an imported one: canonical date and non-negative counts that sum
+to `unit_count`. Any review reason makes the status `review_required`.
 
 Every response is an envelope:
 
@@ -122,6 +133,16 @@ Stateful functions take `--database` from the host process only. The input
 JSON has no path, SQL or network field, and the stateless `protocol` refuses
 them with `DATABASE_REQUIRED`. Legacy floating-point calculations are never
 part of the catalog.
+
+### Ratios
+
+Rates are never floats. A ratio is
+`{"numerator":"153","denominator":"172","decimal":"0.8895","scale":4}`: the
+integer numerator and denominator it was computed from (cents, for money
+ratios), and a decimal rounded half away from zero to a fixed scale of 4 in
+integer arithmetic. All values are JSON strings except `scale`; a negative ratio
+carries a leading minus (`-0.3333`), and a value that rounds to zero is
+`0.0000`. A zero denominator refuses with `ZERO_DENOMINATOR`.
 
 ## Rust stdin/stdout protocol
 
