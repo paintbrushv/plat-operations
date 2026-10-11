@@ -19,8 +19,8 @@
 //! A consumer that pins `version` is refused rather than silently served a
 //! different one.
 use super::{
-    digest, error, readiness, snapshot_metrics, store, t12, trace, variance, ExactError, Result,
-    CONTRACT,
+    digest, error, ingest, readiness, snapshot_metrics, store, t12, trace, variance, ExactError,
+    Result, CONTRACT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -64,8 +64,8 @@ impl Calculation {
 pub const CATALOG: &[Calculation] = &[
     Calculation {
         name: "describe",
-        version: "1.0.0",
-        summary: "List every calculation in this catalog with its version and JSON Schemas.",
+        version: "1.1.0",
+        summary: "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
         stateful: false,
         input_schema: schemas::empty_input,
         output_schema: schemas::describe_output,
@@ -448,6 +448,10 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
                     "contract_version": CONTRACT,
                     "producer": producer(),
                     "calculations": CATALOG.iter().map(Calculation::describe).collect::<Vec<_>>(),
+                    // Host-side only: adapters read local files, which the
+                    // catalog never takes. Listed so a connector can tell its
+                    // operator which profiles `import-with` accepts.
+                    "adapters": ingest::describe_adapters(),
                 }),
             ))
         }
@@ -736,6 +740,29 @@ pub mod schemas {
             }
         })
     }
+    fn adapter_entry() -> Value {
+        json!({
+            "type": "object",
+            "required": ["profile", "summary", "files", "options", "refuses"],
+            "properties": {
+                "profile": {"type": "string", "pattern": "^[a-z0-9._-]+/[1-9][0-9]*$",
+                            "description": "Versioned adapter profile id, recorded as sources.profile on every revision it imports"},
+                "summary": {"type": "string"},
+                "files": {"type": "array", "items": {
+                    "type": "object", "required": ["name", "required", "description", "shape"],
+                    "properties": {"name": {"type": "string"}, "required": {"type": "boolean"},
+                                   "description": {"type": "string"},
+                                   "shape": {"type": "string", "description": "Expected header row or document shape"}}
+                }},
+                "options": {"type": "array", "items": {
+                    "type": "object", "required": ["name", "required", "description"],
+                    "properties": {"name": {"type": "string"}, "required": {"type": "boolean"},
+                                   "description": {"type": "string"}}
+                }},
+                "refuses": {"type": "array", "items": {"type": "string"}}
+            }
+        })
+    }
 
     pub fn empty_input() -> Value {
         json!({"$schema": DRAFT, "type": "object", "additionalProperties": false, "properties": {}})
@@ -743,11 +770,13 @@ pub mod schemas {
     pub fn describe_output() -> Value {
         json!({
             "$schema": DRAFT, "type": "object",
-            "required": ["contract_version", "producer", "calculations"],
+            "required": ["contract_version", "producer", "calculations", "adapters"],
             "properties": {
                 "contract_version": {"const": super::CONTRACT},
                 "producer": {"type": "object"},
-                "calculations": {"type": "array", "items": calculation_entry()}
+                "calculations": {"type": "array", "items": calculation_entry()},
+                "adapters": {"type": "array", "items": adapter_entry(),
+                             "description": "Source adapters the host process can import files through; the catalog itself never reads files"}
             }
         })
     }

@@ -60,7 +60,7 @@ async fn fresh_database(dir: &Path) -> PathBuf {
 async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
     let envelope = catalog::invoke(&call("describe", json!({}), None)).await;
     assert_eq!(envelope.status, "calculated");
-    assert_eq!(envelope.version, Some("1.0.0"));
+    assert_eq!(envelope.version, Some("1.1.0"));
     assert_eq!(envelope.contract_version, "plat.ops/1");
     assert_eq!(envelope.producer["arithmetic"], "checked_i64_cents");
     assert_eq!(envelope.producer["name"], "boxscore-exact");
@@ -164,7 +164,7 @@ async fn refusals_keep_the_envelope_and_name_the_cause() {
     pinned.version = Some("2.0.0".into());
     let mismatch = catalog::invoke(&pinned).await;
     assert_eq!(mismatch.error.as_ref().unwrap()["code"], "VERSION_MISMATCH");
-    assert_eq!(mismatch.version, Some("1.0.0"));
+    assert_eq!(mismatch.version, Some("1.1.0"));
 
     let stateless =
         catalog::invoke(&call("review_period", json!({"revision_id": "x"}), None)).await;

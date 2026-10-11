@@ -12,7 +12,7 @@ use crate::{
     db,
 };
 
-const SOURCE_SYSTEM: &str = "standardized-yardi";
+const SOURCE_SYSTEM: &str = super::STANDARDIZED_SOURCE_SYSTEM;
 
 #[derive(Debug, Clone, Deserialize)]
 struct BudgetComparisonCsvRow {

@@ -55,6 +55,82 @@ All v0.1 ingestion uses CSV files with headers.
 
 Every ingested row stores `source_file` and `source_row` where applicable.
 
+## Adapters (exact-cent ingestion)
+
+The exact-cent core (`boxscore::exact`) never assumes a vendor layout. Every
+file shape it can import is a **source adapter**: an implementation of
+`exact::ingest::SourceAdapter` that turns named local files and string
+options into the vendor-neutral `store::Dataset` plus a `sources` provenance
+object recorded verbatim on the revision. Hosts select an adapter by a
+versioned **profile id** and run it with `boxscore-exact import-with`;
+`boxscore-exact adapters` (and the catalog's `describe`) lists every
+registered adapter's spec.
+
+### Shipped profiles
+
+| profile | files | options | `sources` recorded |
+|---|---|---|---|
+| `canonical.csv/1` | `actuals`, `budgets` (header `account_code,account_name,category,amount`); optional `snapshot` (JSON object) | `property`, `period` (`YYYY-MM`), `units` (whole number) | `profile`, `actuals_sha256`, `budgets_sha256`, `snapshot_sha256` (null when absent) |
+| `canonical.json/1` | `input` (canonical period dataset JSON) | none | `profile`, `canonical_json_sha256` |
+
+`import-csv` and `import` are aliases for these two profiles. The revision's
+`input_sha256` is the SHA-256 of the canonical `Dataset`, so the same content
+hashes the same through any front end.
+
+### Profile ids are versioned and fail closed
+
+- A profile id is `name/N`: a lowercase name of `[a-z0-9._-]` and a positive
+  integer version, for example `canonical.csv/1` or `yardi.gl/1`.
+- Ids match exactly. An unknown id refuses with `UNKNOWN_PROFILE` and lists the
+  registered ids; there is no prefix match, default, or "latest".
+- Any change to what an adapter accepts or how it maps a file into a
+  `Dataset` is a new id (`.../2`) registered alongside the old one, never an
+  edit to an existing id. A stored revision's `sources.profile` therefore
+  always names the mapping that produced it.
+
+### Writing an adapter
+
+1. Implement `SourceAdapter` in `boxscore/src/exact/` (or a submodule):
+   `profile()` returns the id, `spec()` returns an `AdapterSpec` naming every
+   file (with its expected header or shape), every option, and what makes it
+   refuse; `read()` returns `(Dataset, sources)`.
+2. Read files only through `AdapterInputs::require_file` / `read_file`, which
+   apply the 2 MiB per-file cap. Return a JSON object for `sources` holding the
+   SHA-256 of every file read; `ingest::read_with` stamps `sources.profile`
+   and refuses an adapter that states a different one.
+3. Add it to the static registry in `exact::ingest` and add a test that
+   imports synthetic files through it and checks `sources.profile`.
+
+Hosts always go through `ingest::read_with`, which refuses before reading:
+`UNKNOWN_FILE` or `UNKNOWN_OPTION` for a name the spec does not declare,
+`MISSING_FILE` or `MISSING_OPTION` for an absent required one, and
+`ADAPTER_CONTRACT` for an unversioned or inconsistent profile id.
+
+### What an adapter must refuse
+
+An adapter maps; it does not guess. It must refuse (never coerce):
+
+- a missing required header or column, or a header it cannot resolve by name;
+- money that is not an exact decimal (floats, exponent notation, more than two
+  places); amounts are never rounded;
+- an unknown sign convention: the dataset is `positive_costs` (expenses
+  positive, credits and contra-revenue negative) and the adapter must know,
+  not infer, how the source signs map to it;
+- any currency other than USD;
+- vendor total, subtotal, or footer rows passed off as accounts;
+- account categories it was not given by an approved mapping (use `unmapped`
+  so review surfaces them, never a guessed category).
+
+`store::import` then validates the dataset itself (`INVALID_INPUT`,
+`SNAPSHOT_MISMATCH`, `ACCOUNT_MAPPING_CONFLICT`, `MONEY_OVERFLOW`), so an
+adapter cannot weaken the core's checks. Paths stay a host concern: the
+calculation catalog never takes a file path, and adapters run in the host
+process before `import_period`'s dataset would.
+
+The legacy standardized-CSV lanes below keep their `standardized-yardi`
+lineage label (`connectors::standardized::STANDARDIZED_SOURCE_SYSTEM`); they
+feed the legacy floating-point tables, not the exact-cent core.
+
 ## Standardized-CSV Post-ETL Contracts (Asset Management)
 
 These contracts run AFTER each property's per-property ETL produces its
