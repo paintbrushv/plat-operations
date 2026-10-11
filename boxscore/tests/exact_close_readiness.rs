@@ -40,6 +40,7 @@ fn call(input: Value, database: Option<&Path>) -> Call {
         version: None,
         input,
         database: database.map(Path::to_path_buf),
+        caller: "test".into(),
     }
 }
 
@@ -438,16 +439,17 @@ async fn tampered_rows_refuse_with_integrity_error() {
 }
 
 #[tokio::test]
-async fn describe_lists_eleven_functions_with_close_readiness_stateful() {
+async fn describe_lists_twelve_functions_with_close_readiness_stateful() {
     let envelope = catalog::invoke(&Call {
         function: "describe".into(),
         version: None,
         input: json!({}),
         database: None,
+        caller: "test".into(),
     })
     .await;
     let calculations = result(&envelope)["calculations"].as_array().unwrap();
-    assert_eq!(calculations.len(), 11);
+    assert_eq!(calculations.len(), 12);
     let entry = &calculations[9];
     assert_eq!(entry["name"], "close_readiness");
     assert_eq!(entry["version"], "1.0.0");

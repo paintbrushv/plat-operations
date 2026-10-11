@@ -74,6 +74,7 @@ pub async fn calculate(bytes: &[u8]) -> Result<Value> {
         version,
         input: raw,
         database: None,
+        caller: "protocol".into(),
     };
     Ok(catalog::invoke_hashed(&call, super::digest(bytes))
         .await

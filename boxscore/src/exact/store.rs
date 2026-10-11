@@ -124,6 +124,14 @@ CREATE TABLE exact_reports (
 );
 CREATE TABLE exact_migrations (source_sha256 TEXT PRIMARY KEY, review_json TEXT NOT NULL, differences_json TEXT NOT NULL);
 CREATE TABLE archived_reports (id TEXT PRIMARY KEY, original_body TEXT NOT NULL, original_path TEXT, original_body_sha256 TEXT NOT NULL);
+-- One row per catalog invocation, success or refusal. No foreign keys: a refusal
+-- may name a revision that does not exist. input_json is NULL unless the host
+-- sets BOXSCORE_TRACE_INPUTS=1.
+CREATE TABLE exact_invocations (
+ trace_id TEXT PRIMARY KEY, function TEXT NOT NULL, version TEXT NOT NULL, producer_version TEXT NOT NULL,
+ caller TEXT NOT NULL, input_sha256 TEXT NOT NULL, output_sha256 TEXT, status TEXT NOT NULL, error_code TEXT,
+ revision_id TEXT, report_id TEXT, input_json TEXT, started_at TEXT NOT NULL, finished_at TEXT NOT NULL
+);
 -- Read-only names prevent pre-cents writers from silently interpreting cents as dollars.
 CREATE VIEW schema_migrations AS SELECT 'exact/1' AS version, '' AS applied_at;
 CREATE VIEW properties AS SELECT DISTINCT property AS id, property AS name, unit_count, '' AS market,
@@ -159,6 +167,7 @@ pub async fn create(path: &Path) -> Result<SqlitePool> {
         "exact_reports",
         "exact_migrations",
         "archived_reports",
+        "exact_invocations",
     ] {
         for action in ["UPDATE", "DELETE"] {
             sqlx::raw_sql(&format!("CREATE TRIGGER {table}_no_{action} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT,'immutable exact record'); END;"))
@@ -190,6 +199,16 @@ pub async fn open(path: &Path, read_only: bool) -> Result<SqlitePool> {
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(&pool)
         .await?;
+    if app == APPLICATION_ID && version == 1 {
+        pool.close().await;
+        return Err(error(
+            "SCHEMA_MISMATCH",
+            format!(
+                "This database was created by exact-cent schema 1; this build needs schema {SCHEMA}. \
+                 Re-import its periods into a new database (boxscore-exact init) or rebuild it by reviewed copy migration from the legacy source"
+            ),
+        ));
+    }
     if app != APPLICATION_ID || version != SCHEMA {
         pool.close().await;
         return Err(error(

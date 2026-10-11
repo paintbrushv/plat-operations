@@ -67,9 +67,12 @@ Every report says `human_approval: not_granted`.
   Every addition and subtraction is checked, including aggregate totals.
 - Canonical input files and protocol requests are limited to 2 MiB; the
   calculation also caps the combined row count at 100,000.
-- Database `application_id` is `0x504c4154`, schema version is 1. Money columns
-  are INTEGER cents with type checks. Imports commit atomically. Revisions,
-  snapshots, and reports have UPDATE/DELETE refusal triggers.
+- Database `application_id` is `0x504c4154`, schema version is 2 (2 added the
+  `exact_invocations` trace table; a schema-1 database refuses with
+  `SCHEMA_MISMATCH` and must be re-imported or rebuilt by reviewed copy
+  migration). Money columns are INTEGER cents with type checks. Imports commit
+  atomically. Revisions, snapshots, reports, and invocation records have
+  UPDATE/DELETE refusal triggers.
 - Input and issued-body SHA-256 values identify their content. Reviews verify
   stored canonical input against its hash. These are integrity checks, not a
   substitute for operating-system access controls.
@@ -99,6 +102,7 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 | `delinquency@1.0.0` | no | delinquent, prepaid and net balances, each as a share of in-place rent; refuses `MISSING_DELINQUENCY` |
 | `close_readiness@1.0.0` | yes | per property with a revision for `period` (optionally one `property`): the latest revision, `ready` or `not_ready`, account coverage counts, blocking review reasons from `review_period`, issued reports, and `not_tracked_in_exact_store` |
 | `t12@1.0.0` | yes | trailing twelve-period statement for `property` ending at `end_period`: category rows, NOI, budgets and actual-minus-budget NOI per month, the revision used for each month, and `missing_periods`; refuses `NOT_FOUND` when the property has no revision in the window |
+| `get_provenance@1.0.0` | yes | the recorded invocation for a `trace_id`, with the revision (`sources`, `reason`, parent) and report hash it names; unknown ids refuse `NOT_FOUND` |
 
 The three snapshot metrics (`occupancy`, `economic_occupancy`, `delinquency`) take exactly one of `{"revision_id": "..."}` or
 `{"snapshot": {...}, "unit_count": N}`. They are not stateful: with an inline
@@ -142,6 +146,8 @@ Every response is an envelope:
 {"contract_version":"plat.ops/1","function":"noi_variance","version":"1.0.0",
  "producer":{"name":"boxscore-exact","version":"0.1.1","arithmetic":"checked_i64_cents"},
  "input_sha256":"…","output_sha256":"…","computed_at":"2026-10-11T15:00:00Z",
+ "trace_id":"3f0c9b52-…","trace_store":"database",
+ "citation":"boxscore noi_variance@1.0.0 · trace 3f0c9b52-… · input sha256:1b7638a0c2d4… · output sha256:ce5487f1e2a3…",
  "status":"calculated","result":{…}}
 ```
 
@@ -152,6 +158,16 @@ received them (for in-process calls, of the canonical JSON serialization).
 same `output_sha256`, so a number can be reproduced from its citation.
 Refusals keep the envelope with `status: "refused"` and a typed `error`;
 `boxscore-exact call` exits 2 on a refusal and 0 otherwise.
+
+Every envelope, refusals included, also carries a `trace_id` (UUID v4) and a
+`citation`: one line naming `function@version`, the trace id and the first 12
+hex characters of the input and output hashes (or `refused CODE`), plus the
+revision and report it touched. Paste it into a memo. With a host database the
+call is recorded in the append-only `exact_invocations` table and
+`boxscore-exact trace --database DB --id TRACE_ID` (or `get_provenance`) reads
+it back; `trace_store` says where the record went. See
+[PROVENANCE.md](PROVENANCE.md) for verification, its limits, and the
+`BOXSCORE_TRACE_INPUTS` and `BOXSCORE_TRACE_DIR` controls.
 
 Versions are per function and independent of the contract version. A
 **patch** bump changes nothing observable in `result`; a **minor** bump only

@@ -31,6 +31,14 @@ enum Command {
         #[arg(long)]
         database: Option<PathBuf>,
     },
+    /// Show the recorded invocation behind a citation: the same envelope as
+    /// `call --function get_provenance` with `{"trace_id": ID}`.
+    Trace {
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        id: String,
+    },
     /// Create a new exact-cent database; existing paths are refused.
     Init {
         #[arg(long)]
@@ -147,6 +155,7 @@ async fn run(command: Command) -> Result<Value> {
                     serde_json::from_slice(&bytes)?
                 },
                 database,
+                caller: "cli".into(),
             };
             let envelope = if empty {
                 catalog::invoke(&call).await
@@ -154,6 +163,16 @@ async fn run(command: Command) -> Result<Value> {
                 catalog::invoke_hashed(&call, exact::digest(&bytes)).await
             };
             Ok(envelope.to_value())
+        }
+        Command::Trace { database, id } => {
+            let call = catalog::Call {
+                function: "get_provenance".into(),
+                version: None,
+                input: json!({"trace_id": id}),
+                database: Some(database),
+                caller: "cli".into(),
+            };
+            Ok(catalog::invoke(&call).await.to_value())
         }
         Command::Init { database } => {
             let pool = store::create(&database).await?;

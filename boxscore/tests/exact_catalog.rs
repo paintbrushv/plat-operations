@@ -46,6 +46,7 @@ fn call(function: &str, input: Value, database: Option<&Path>) -> Call {
         version: None,
         input,
         database: database.map(Path::to_path_buf),
+        caller: "test".into(),
     }
 }
 
@@ -88,7 +89,8 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
             "economic_occupancy",
             "delinquency",
             "close_readiness",
-            "t12"
+            "t12",
+            "get_provenance"
         ]
     );
     for entry in result["calculations"].as_array().unwrap() {
@@ -104,6 +106,7 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
         result["calculations"].as_array().unwrap().len(),
         CATALOG.len()
     );
+    assert_eq!(CATALOG.len(), 12);
 }
 
 #[tokio::test]
@@ -305,6 +308,7 @@ fn golden_inputs_agree_with_their_input_schemas() {
             json!({"property": "p", "end_period": "2026-05", "revision_policy": "issued_only"}),
         ),
         ("t12", json!({"property": "p", "end_period": "2026-05"})),
+        ("get_provenance", json!({"trace_id": "t1"})),
     ];
     // The snapshot metrics take either a stored revision or an inline
     // snapshot; each form is a golden input against the same schema.
