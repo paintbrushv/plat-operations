@@ -50,6 +50,32 @@ enum Command {
         #[arg(long)]
         database: Option<PathBuf>,
     },
+    /// Serve the catalog over HTTP: MCP Streamable HTTP at /mcp, one
+    /// POST /v1/calc/{function} route per catalog function, /openapi.json,
+    /// /health and OAuth protected-resource metadata. Loopback only unless
+    /// --api-key-file is given. Stops on SIGINT or SIGTERM.
+    Serve {
+        /// IP address and port to listen on.
+        #[arg(long, default_value = exact::mcp_http::DEFAULT_BIND)]
+        bind: String,
+        #[arg(long)]
+        database: Option<PathBuf>,
+        /// File of `key_id:secret` lines (mode 0600); enables bearer auth.
+        #[arg(long)]
+        api_key_file: Option<PathBuf>,
+        /// Origin allowed to send requests (repeatable); any other Origin gets 403.
+        #[arg(long = "allow-origin")]
+        allow_origins: Vec<String>,
+        /// Public URL of this server (resource identifier); default http://127.0.0.1:<port>.
+        #[arg(long)]
+        public_url: Option<String>,
+        /// OAuth authorization server to advertise in metadata (repeatable).
+        #[arg(long = "authorization-server")]
+        authorization_servers: Vec<String>,
+        /// Requests per minute per key.
+        #[arg(long, default_value_t = exact::mcp_http::DEFAULT_RATE_LIMIT)]
+        rate_limit: u32,
+    },
     /// Create a new exact-cent database; existing paths are refused.
     Init {
         #[arg(long)]
@@ -219,9 +245,9 @@ async fn run(command: Command) -> Result<Value> {
             };
             Ok(catalog::invoke(&call).await.to_value())
         }
-        Command::Mcp { .. } => Err(error(
+        Command::Mcp { .. } | Command::Serve { .. } => Err(error(
             "INTERNAL_ERROR",
-            "mcp is served by main, not as a one-shot command",
+            "servers are run by main, not as one-shot commands",
         )),
         Command::Init { database } => {
             let pool = store::create(&database).await?;
@@ -328,8 +354,37 @@ async fn run(command: Command) -> Result<Value> {
 }
 #[tokio::main]
 async fn main() {
-    // Intentionally no dotenv, tracing subscriber, HTTP server, or private legacy config.
+    // Intentionally no dotenv, tracing subscriber, or private legacy config.
+    // The only HTTP server is `serve`, the exact catalog's own.
     let command = Cli::parse().command;
+    if let Command::Serve {
+        bind,
+        database,
+        api_key_file,
+        allow_origins,
+        public_url,
+        authorization_servers,
+        rate_limit,
+    } = command
+    {
+        let options = exact::mcp_http::ServeOptions {
+            bind,
+            database,
+            api_key_file,
+            allow_origins,
+            public_url,
+            authorization_servers,
+            rate_limit,
+        };
+        let code = match exact::mcp_http::serve(options, exact::mcp_http::shutdown_signal()).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("boxscore-exact serve: {e}");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
     if let Command::Mcp { database } = command {
         // stdout belongs to JSON-RPC alone; nothing is printed after the session.
         let code = match exact::mcp::run_stdio(database).await {

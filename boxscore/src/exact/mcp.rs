@@ -42,11 +42,25 @@ const INVALID_PARAMS: i64 = -32602;
 #[derive(Debug, Clone, Default)]
 pub struct Server {
     database: Option<PathBuf>,
+    /// Recorded as the trace caller of every tool call: `"mcp"` over stdio,
+    /// `"http:<subject>"` over HTTP.
+    caller: String,
 }
 
 impl Server {
     pub fn new(database: Option<PathBuf>) -> Self {
-        Self { database }
+        Self {
+            database,
+            caller: "mcp".into(),
+        }
+    }
+
+    /// The same server, recording `caller` as the trace caller.
+    pub fn with_caller(&self, caller: impl Into<String>) -> Self {
+        Self {
+            database: self.database.clone(),
+            caller: caller.into(),
+        }
     }
 
     /// Handle one raw line (without its newline). `None` means the line was a
@@ -175,7 +189,7 @@ impl Server {
             input,
             // The host's configured database, never anything from arguments.
             database: self.database.clone(),
-            caller: "mcp".into(),
+            caller: self.caller.clone(),
         };
         let envelope = catalog::invoke(&call).await;
         let refused = envelope.refused();

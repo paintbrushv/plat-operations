@@ -2,6 +2,7 @@
 pub mod catalog;
 pub mod ingest;
 pub mod mcp;
+pub mod mcp_http;
 pub mod migration;
 pub mod money;
 pub mod protocol;

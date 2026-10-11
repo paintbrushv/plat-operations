@@ -200,7 +200,7 @@ pub struct Call {
     pub input: Value,
     pub database: Option<PathBuf>,
     /// Which host made the call, recorded with the trace: `"cli"`,
-    /// `"protocol"`, `"mcp"`. Blank is recorded as `"unknown"`.
+    /// `"protocol"`, `"mcp"`, `"http:<key_id>"`. Blank is recorded as `"unknown"`.
     pub caller: String,
 }
 

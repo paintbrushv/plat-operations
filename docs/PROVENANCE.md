@@ -50,8 +50,8 @@ writable. The result is still returned, with `trace_store: "none"` and a
 same database problem anyway, and that refusal is in `error`.
 
 Each record has these fields: `trace_id`, `function`, `version`,
-`producer_version`, `caller` (`cli`, `protocol`, `mcp`, or `unknown` if a host
-did not set it), `input_sha256`, `output_sha256` (null for a refusal),
+`producer_version`, `caller` (`cli`, `protocol`, `mcp`, `http:<key_id>`, or
+`unknown` if a host did not set it), `input_sha256`, `output_sha256` (null for a refusal),
 `status` (`calculated`, `review_required` or `refused`), `error_code`,
 `revision_id`, `report_id`, `input_json`, `started_at` and `finished_at`.
 
