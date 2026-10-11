@@ -106,6 +106,52 @@ fn account_mapping_prefers_clear_ontology_patterns() {
 }
 
 #[test]
+fn suggestions_match_on_word_boundaries_and_never_turn_expenses_into_income() {
+    let category = |code: &str, name: &str| suggest_category(code, name).map(|m| m.category);
+    // "fee" used to win before "management fee", classifying the expense as
+    // revenue and overstating NOI by twice the fee.
+    for name in [
+        "Management Fees",
+        "Property Management Fee",
+        "Mgmt Fee - Base",
+    ] {
+        assert_eq!(
+            category("6300", name).as_deref(),
+            Some("Management Fees"),
+            "{name}"
+        );
+    }
+    // "rent" must not match inside "current".
+    for name in ["Current Year Distributions", "Current Owner Draw"] {
+        assert_eq!(category("3900", name), None, "{name}");
+    }
+    assert_eq!(
+        category("4000", "Apartment Rent").as_deref(),
+        Some("Rental Income")
+    );
+    assert_eq!(
+        category("4010", "Rental Income - Residential").as_deref(),
+        Some("Rental Income")
+    );
+    assert_eq!(
+        category("4200", "Pet Rent").as_deref(),
+        Some("Other Income")
+    );
+    assert_eq!(
+        category("4210", "Late Fees").as_deref(),
+        Some("Other Income")
+    );
+    assert_eq!(category("5300", "Utilities").as_deref(), Some("Utilities"));
+    assert_eq!(
+        category("5050", "Salaries - Leasing").as_deref(),
+        Some("Payroll")
+    );
+    // A chart-of-accounts prefix is not evidence: no name match means review.
+    assert_eq!(category("6010", "Something Else"), None);
+    assert_eq!(category("6020", "Property Taxes").as_deref(), Some("Taxes"));
+}
+
+#[test]
 fn reads_budget_comparison_rows_and_skips_bad_numeric_values() {
     let temp_dir = tempfile::tempdir().unwrap();
     let file = temp_dir.path().join("budget_comparison.csv");
