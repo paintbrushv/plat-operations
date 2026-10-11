@@ -171,7 +171,7 @@ fn class_name(class: &AccountClass) -> &'static str {
 }
 
 /// Revenue first, then expenses, each in `NOI_CATEGORIES` order, then any
-/// non-canonical category alphabetically.
+/// other category (including `Unmapped`) alphabetically, ignoring case.
 fn order_key(key: &str) -> (u8, usize, String) {
     match NOI_CATEGORIES.iter().position(|known| *known == key) {
         Some(index) => {
@@ -182,7 +182,7 @@ fn order_key(key: &str) -> (u8, usize, String) {
             };
             (group, index, String::new())
         }
-        None => (2, 0, key.to_string()),
+        None => (2, 0, key.to_lowercase()),
     }
 }
 
@@ -322,11 +322,18 @@ fn compute(property: &str, periods: &[String], loaded: &Loaded) -> Result<(&'sta
         .filter(|(_, slot)| slot.is_none())
         .map(|(period, _)| period)
         .collect();
-    let review_reasons: Vec<&str> = if missing.is_empty() {
-        Vec::new()
-    } else {
-        vec!["missing_periods"]
-    };
+    let mut review_reasons: Vec<&str> = Vec::new();
+    if !missing.is_empty() {
+        review_reasons.push("missing_periods");
+    }
+    if actuals
+        .unmapped
+        .iter()
+        .flatten()
+        .any(|amount| *amount != Money::ZERO)
+    {
+        review_reasons.push("unmapped_accounts");
+    }
     let revisions: Vec<Value> = periods
         .iter()
         .zip(loaded)
@@ -453,7 +460,7 @@ pub fn output_schema() -> Value {
                     "description": "Actual minus budget NOI where both are present"
                 }, {"type": "null"}]
             },
-            "review_reasons": {"type": "array", "items": {"enum": ["missing_periods"]}},
+            "review_reasons": {"type": "array", "items": {"enum": ["missing_periods", "unmapped_accounts"]}},
             "missing_periods": {"type": "array", "items": period()}
         }
     })

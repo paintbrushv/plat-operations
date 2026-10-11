@@ -116,8 +116,10 @@ and in `noi`, is listed in `missing_periods`, and makes the status
 and nothing is ever filled with zero. Categories are folded to their reviewed
 spelling (`rental income` and `Rental Income` share a row), ordered revenue,
 expenses, then other categories alphabetically; rows with no activity are
-omitted. NOI is revenue minus expenses; `unmapped` rows are shown but excluded
-from NOI and totalled separately. `budgets` is present only when every month
+omitted. NOI is revenue minus expenses; `Unmapped` rows are shown but excluded
+from NOI and totalled separately, and any nonzero unmapped total in a present
+month adds the review reason `unmapped_accounts` (as in `review_period`).
+`budgets` is present only when every month
 that has a revision also has budget rows, and `variance` (actual minus budget
 NOI) only alongside it. Unlike `review_period`, which bridges only accounts
 present in both actuals and budgets, `t12` reports every stored line.
