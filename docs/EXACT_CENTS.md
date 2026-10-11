@@ -149,6 +149,8 @@ before publishing a Rust package. No real customer database has been migrated
 as part of these synthetic tests.
 
 Account-code matching tolerates different display names and category case or
-surrounding whitespace. The producer uses a deterministic display name and a
+surrounding whitespace. Account codes themselves must not carry leading or
+trailing whitespace; such rows refuse with `INVALID_INPUT` rather than
+splitting one account into two. The producer uses a deterministic display name and a
 normalized category. Conflicting categories for one code refuse with
 `ACCOUNT_MAPPING_CONFLICT`; resolve the mapping before import or calculation.
