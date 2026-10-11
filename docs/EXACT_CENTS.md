@@ -97,14 +97,30 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 | `occupancy@1.0.0` | no | occupied units over unit count as a ratio, with the unit counts and `down_units_present` review reason |
 | `economic_occupancy@1.0.0` | no | in-place rent over market rent as a ratio, both totals echoed; refuses `MISSING_MARKET_RENT`, `MISSING_IN_PLACE_RENT`, `ZERO_DENOMINATOR` |
 | `delinquency@1.0.0` | no | delinquent, prepaid and net balances, each as a share of in-place rent; refuses `MISSING_DELINQUENCY` |
+| `t12@1.0.0` | yes | trailing twelve-period statement for `property` ending at `end_period`: category rows, NOI, budgets and actual-minus-budget NOI per month, the revision used for each month, and `missing_periods`; refuses `NOT_FOUND` when the property has no revision in the window |
 
-The last three take exactly one of `{"revision_id": "..."}` or
+The three snapshot metrics (`occupancy`, `economic_occupancy`, `delinquency`) take exactly one of `{"revision_id": "..."}` or
 `{"snapshot": {...}, "unit_count": N}`. They are not stateful: with an inline
 snapshot they never open a database. With `revision_id` the host must supply
 `--database` (otherwise `DATABASE_REQUIRED`) and the stored revision must have
 a snapshot (otherwise `MISSING_OCCUPANCY_SNAPSHOT`). An inline snapshot is
 validated like an imported one: canonical date and non-negative counts that sum
 to `unit_count`. Any review reason makes the status `review_required`.
+
+`t12` takes `{"property", "end_period": "YYYY-MM", "revision_policy"}`. Each of
+the twelve months uses one stored revision, checked against its input hash:
+`latest` (default) is the highest revision number, `issued_only` the highest
+revision with an issued report. A month with no revision is `null` in every row
+and in `noi`, is listed in `missing_periods`, and makes the status
+`review_required` (`missing_periods`); totals cover only the present months,
+and nothing is ever filled with zero. Categories are folded to their reviewed
+spelling (`rental income` and `Rental Income` share a row), ordered revenue,
+expenses, then other categories alphabetically; rows with no activity are
+omitted. NOI is revenue minus expenses; `unmapped` rows are shown but excluded
+from NOI and totalled separately. `budgets` is present only when every month
+that has a revision also has budget rows, and `variance` (actual minus budget
+NOI) only alongside it. Unlike `review_period`, which bridges only accounts
+present in both actuals and budgets, `t12` reports every stored line.
 
 Every response is an envelope:
 

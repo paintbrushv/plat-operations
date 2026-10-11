@@ -13,7 +13,7 @@
 //! existing value; a **major** bump may change a number for the same input.
 //! A consumer that pins `version` is refused rather than silently served a
 //! different one.
-use super::{digest, error, snapshot_metrics, store, variance, ExactError, Result, CONTRACT};
+use super::{digest, error, snapshot_metrics, store, t12, variance, ExactError, Result, CONTRACT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -125,6 +125,14 @@ pub const CATALOG: &[Calculation] = &[
         stateful: false,
         input_schema: schemas::snapshot_metric_input,
         output_schema: schemas::delinquency_output,
+    },
+    Calculation {
+        name: "t12",
+        version: "1.0.0",
+        summary: "Trailing twelve-period statement for a property from stored revisions: category rows, NOI, budgets and variance per month; a month with no revision is null and flagged, never zero.",
+        stateful: true,
+        input_schema: t12::input_schema,
+        output_schema: t12::output_schema,
     },
 ];
 
@@ -421,6 +429,10 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
             let mut result = result;
             result["review_reasons"] = json!(review_reasons);
             Ok((status, result))
+        }
+        "t12" => {
+            let input: t12::Input = parse(&call.input)?;
+            t12::run(database(calc, call)?, input).await
         }
         other => Err(error(
             "INTERNAL_ERROR",
