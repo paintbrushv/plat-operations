@@ -120,11 +120,19 @@ pub async fn assemble_t12(
     // Build a lookup: category → period → total.
     let mut cat_period: std::collections::HashMap<String, std::collections::HashMap<String, f64>> =
         std::collections::HashMap::new();
+    // Fold the stored category through the same case-insensitive
+    // canonicalization the variance engine uses, and accumulate rather than
+    // overwrite, so `rental income` and `Rental Income` land in one row
+    // instead of one of them vanishing from T12 NOI.
     for cm in &category_months {
-        cat_period
-            .entry(cm.noi_category.clone())
+        let category = ontology::canonical_category(&cm.noi_category)
+            .map(str::to_string)
+            .unwrap_or_else(|| cm.noi_category.clone());
+        *cat_period
+            .entry(category)
             .or_default()
-            .insert(cm.period_label.clone(), cm.total);
+            .entry(cm.period_label.clone())
+            .or_insert(0.0) += cm.total;
     }
 
     // Build rows in ontology order: revenue categories first, then expense.
@@ -244,6 +252,54 @@ mod tests {
         assert_eq!(compact_dollars(-45_000.0), "-$45.0k");
         assert_eq!(compact_dollars(-950.0), "-$950");
         assert_eq!(compact_dollars(-1_234_567.0), "-$1.23M");
+    }
+
+    #[tokio::test]
+    async fn category_case_folds_into_one_t12_row_and_noi() {
+        let pool = db::connect("sqlite::memory:").await.unwrap();
+        db::init_database(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO properties (id, name, market, unit_count, owner_entity, property_manager, created_at)
+             VALUES ('p1', 'Case Property', 'Test', 100, 'Example Sponsor', 'PM', '2026-01-01')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let pid = db::upsert_period(&pool, "2026-04").await.unwrap();
+        for (code, category, amount) in [
+            ("4000", "rental income", 6_000.0f64),
+            ("4001", "Rental Income", 4_000.0),
+            ("5000", "PAYROLL", 3_000.0),
+            ("3000", "unmapped", 500_000.0),
+        ] {
+            sqlx::query(
+                "INSERT INTO gl_actuals (id, property_id, period_id, account_code, account_name, category, amount, source_file, source_row, created_at)
+                 VALUES (?, 'p1', ?, ?, ?, ?, ?, 'seed.csv', 1, '2026-01-01')",
+            )
+            .bind(db::new_id())
+            .bind(&pid)
+            .bind(code)
+            .bind(code)
+            .bind(category)
+            .bind(amount)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let stmt = assemble_t12(&pool, "Case Property", Some("2026-04"))
+            .await
+            .unwrap();
+        let idx = stmt.periods.iter().position(|p| p == "2026-04").unwrap();
+        let row = |label: &str| {
+            stmt.rows
+                .iter()
+                .find(|r| r.label == label)
+                .unwrap_or_else(|| panic!("{label} row missing: {:?}", stmt.rows))
+        };
+        assert_eq!(row("Rental Income").values[idx], 10_000.0);
+        assert_eq!(row("Payroll").values[idx], 3_000.0);
+        assert_eq!(row("NOI").values[idx], 7_000.0);
+        assert_eq!(row("Unmapped (excluded)").values[idx], 500_000.0);
     }
 
     #[tokio::test]

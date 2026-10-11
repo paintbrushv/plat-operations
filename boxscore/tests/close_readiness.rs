@@ -146,6 +146,31 @@ async fn close_readiness_marks_property_ready_when_required_feeds_are_period_mat
 }
 
 #[tokio::test]
+async fn close_readiness_normalizes_an_unpadded_period_before_matching_feeds() {
+    let pool = db::connect("sqlite::memory:").await.unwrap();
+    db::init_database(&pool).await.unwrap();
+    seed_property_with_june_feeds(&pool, "Ready Ridge").await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let result = close_readiness::assess_close_readiness(&pool, "2026-6", temp_dir.path())
+        .await
+        .unwrap();
+    assert_eq!(result.period, "2026-06");
+    let property = &result.properties[0];
+    assert_eq!(
+        property.status,
+        close_readiness::CloseReadinessStatus::Ready,
+        "feeds: {:?}",
+        property.feeds
+    );
+    assert!(
+        close_readiness::assess_close_readiness(&pool, "2026-13", temp_dir.path())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn close_readiness_surfaces_stale_and_missing_feeds_as_not_ready() {
     let pool = db::connect("sqlite::memory:").await.unwrap();
     db::init_database(&pool).await.unwrap();

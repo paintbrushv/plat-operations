@@ -436,35 +436,47 @@ pub async fn analyze_variance(
     result
 }
 
+/// Account identity is the account code plus its NOI category, matched
+/// without regard to case. The display name is taken from the first line seen
+/// (actuals first), so a budget export that spells `account_name` differently
+/// does not split one account into a phantom favorable and unfavorable driver.
+/// This mirrors `exact::variance::compute` and `db::budget_variance`.
 pub fn compute_account_variances(actuals: &[GlLine], budgets: &[GlLine]) -> Vec<AccountVariance> {
-    let mut keys = std::collections::BTreeMap::<(String, String, String), (f64, f64)>::new();
-    for line in actuals {
-        let key = (
-            line.account_code.clone(),
-            line.account_name.clone(),
-            line.category.clone(),
-        );
-        keys.entry(key).or_default().0 += line.amount;
+    struct Totals {
+        account_name: String,
+        category: String,
+        actual: f64,
+        budget: f64,
     }
-    for line in budgets {
-        let key = (
-            line.account_code.clone(),
-            line.account_name.clone(),
-            line.category.clone(),
-        );
-        keys.entry(key).or_default().1 += line.amount;
+    let mut keys = std::collections::BTreeMap::<(String, String), Totals>::new();
+    for (is_budget, lines) in [(false, actuals), (true, budgets)] {
+        for line in lines {
+            let category = crate::ontology::canonical_category(&line.category)
+                .map(str::to_string)
+                .unwrap_or_else(|| line.category.trim().to_string());
+            let key = (line.account_code.clone(), category.to_ascii_lowercase());
+            let entry = keys.entry(key).or_insert_with(|| Totals {
+                account_name: line.account_name.clone(),
+                category,
+                actual: 0.0,
+                budget: 0.0,
+            });
+            if is_budget {
+                entry.budget += line.amount;
+            } else {
+                entry.actual += line.amount;
+            }
+        }
     }
     keys.into_iter()
-        .map(
-            |((account_code, account_name, category), (actual, budget))| AccountVariance {
-                account_code,
-                account_name,
-                category,
-                actual,
-                budget,
-                variance: actual - budget,
-            },
-        )
+        .map(|((account_code, _), totals)| AccountVariance {
+            account_code,
+            account_name: totals.account_name,
+            category: totals.category,
+            actual: totals.actual,
+            budget: totals.budget,
+            variance: totals.actual - totals.budget,
+        })
         .collect()
 }
 
@@ -931,6 +943,42 @@ mod tests {
             source_row: 1,
             created_at: "now".to_string(),
         }
+    }
+
+    fn named(code: &str, name: &str, category: &str, amount: f64) -> GlLine {
+        GlLine {
+            account_name: name.to_string(),
+            ..line(code, category, amount)
+        }
+    }
+
+    #[test]
+    fn name_spelling_and_category_case_do_not_split_an_account() {
+        // The budget export spells the name differently and the category in
+        // lower case; before this test that produced two rows, one with
+        // budget=0 and one with actual=0, i.e. a spurious large favorable AND
+        // unfavorable driver on the same account.
+        let actuals = vec![
+            named("5253", "Manager Salaries", "Payroll", 100.0),
+            named("4000", "Rent", "Rental Income", 1_000.0),
+        ];
+        let budgets = vec![
+            named("5253", "Mgr Salaries", "payroll", 90.0),
+            named("4000", "Apartment Rent", "Rental Income", 900.0),
+        ];
+        let variances = compute_account_variances(&actuals, &budgets);
+        assert_eq!(variances.len(), 2);
+        let payroll = variances.iter().find(|v| v.account_code == "5253").unwrap();
+        assert_eq!(payroll.account_name, "Manager Salaries");
+        assert_eq!(payroll.category, "Payroll");
+        assert_eq!(
+            (payroll.actual, payroll.budget, payroll.variance),
+            (100.0, 90.0, 10.0)
+        );
+        assert!(top_drivers(&variances, true)
+            .iter()
+            .all(|d| d.account_code != "5253"));
+        assert_eq!(top_drivers(&variances, false)[0].account_code, "5253");
     }
 
     #[test]
