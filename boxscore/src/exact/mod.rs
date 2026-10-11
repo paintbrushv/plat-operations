@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod ratio;
 pub mod snapshot_metrics;
 pub mod store;
+pub mod t12;
 pub mod variance;
 
 pub const CONTRACT: &str = "plat.ops/1";

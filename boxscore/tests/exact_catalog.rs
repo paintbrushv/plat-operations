@@ -86,7 +86,8 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
             "list_revisions",
             "occupancy",
             "economic_occupancy",
-            "delinquency"
+            "delinquency",
+            "t12"
         ]
     );
     for entry in result["calculations"].as_array().unwrap() {
@@ -293,6 +294,11 @@ fn golden_inputs_agree_with_their_input_schemas() {
             "list_revisions",
             json!({"property": "p", "period": "2026-05"}),
         ),
+        (
+            "t12",
+            json!({"property": "p", "end_period": "2026-05", "revision_policy": "issued_only"}),
+        ),
+        ("t12", json!({"property": "p", "end_period": "2026-05"})),
     ];
     // The snapshot metrics take either a stored revision or an inline
     // snapshot; each form is a golden input against the same schema.

@@ -498,7 +498,7 @@ async fn revision_path_refusals() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn describe_lists_nine_functions_with_the_new_ones_stateless() {
+async fn describe_lists_ten_functions_with_the_snapshot_metrics_stateless() {
     let envelope = run("describe", json!({})).await;
     let result = envelope.result.unwrap();
     let calculations = result["calculations"].as_array().unwrap();
@@ -506,12 +506,12 @@ async fn describe_lists_nine_functions_with_the_new_ones_stateless() {
         .iter()
         .map(|c| c["name"].as_str().unwrap())
         .collect();
-    assert_eq!(calculations.len(), 9);
+    assert_eq!(calculations.len(), 10);
     assert_eq!(
-        names[6..],
+        names[6..9],
         ["occupancy", "economic_occupancy", "delinquency"]
     );
-    for entry in &calculations[6..] {
+    for entry in &calculations[6..9] {
         assert_eq!(entry["version"], "1.0.0");
         assert_eq!(entry["stateful"], false);
         assert_eq!(entry["input_schema"]["additionalProperties"], false);
