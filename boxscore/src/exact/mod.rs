@@ -8,10 +8,12 @@ pub mod readiness;
 pub mod snapshot_metrics;
 pub mod store;
 pub mod t12;
+pub mod trace;
 pub mod variance;
 
 pub const CONTRACT: &str = "plat.ops/1";
-pub const SCHEMA: i64 = 1;
+/// `user_version` of an exact-cent database. 2 added `exact_invocations`.
+pub const SCHEMA: i64 = 2;
 pub const APPLICATION_ID: i64 = 0x504c4154;
 
 pub fn digest(bytes: &[u8]) -> String {

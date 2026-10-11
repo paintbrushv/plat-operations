@@ -7,6 +7,11 @@
 //! out. Nothing here reaches past `exact::`; legacy floating-point features
 //! are never exposed through the catalog.
 //!
+//! Every invocation, refusals included, gets a `trace_id` and a one-line
+//! `citation`, and is recorded by [`super::trace`] in the host's database (or
+//! a JSONL file when the host configures one). `get_provenance` reads a
+//! recorded invocation back.
+//!
 //! Versioning policy (per function, independent of the `plat.ops/1`
 //! contract): a **patch** bump changes nothing a consumer can observe in
 //! `result`; a **minor** bump adds fields to `result` without changing any
@@ -14,7 +19,8 @@
 //! A consumer that pins `version` is refused rather than silently served a
 //! different one.
 use super::{
-    digest, error, readiness, snapshot_metrics, store, t12, variance, ExactError, Result, CONTRACT,
+    digest, error, readiness, snapshot_metrics, store, t12, trace, variance, ExactError, Result,
+    CONTRACT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -144,6 +150,14 @@ pub const CATALOG: &[Calculation] = &[
         input_schema: t12::input_schema,
         output_schema: t12::output_schema,
     },
+    Calculation {
+        name: "get_provenance",
+        version: "1.0.0",
+        summary: "Read back a recorded invocation by trace_id: function, version, caller, hashes, status, and the revision and report it produced or read.",
+        stateful: true,
+        input_schema: schemas::get_provenance_input,
+        output_schema: schemas::get_provenance_output,
+    },
 ];
 
 /// Resolve a calculation by name and, when given, exact version.
@@ -176,15 +190,33 @@ pub fn producer() -> Value {
     })
 }
 
-/// A request to run one calculation. `database` is set by the host process
-/// (CLI flag, connector configuration), never parsed from `input`.
+/// A request to run one calculation. `database` and `caller` are set by the
+/// host process (CLI flag, connector configuration), never parsed from
+/// `input`.
 #[derive(Debug, Clone)]
 pub struct Call {
     pub function: String,
     pub version: Option<String>,
     pub input: Value,
     pub database: Option<PathBuf>,
+    /// Which host made the call, recorded with the trace: `"cli"`,
+    /// `"protocol"`, `"mcp"`. Blank is recorded as `"unknown"`.
+    pub caller: String,
 }
+
+impl Default for Call {
+    fn default() -> Self {
+        Self {
+            function: String::new(),
+            version: None,
+            input: json!({}),
+            database: None,
+            caller: UNKNOWN_CALLER.into(),
+        }
+    }
+}
+
+pub const UNKNOWN_CALLER: &str = "unknown";
 
 /// Every catalog response, success or refusal.
 #[derive(Debug, Clone, Serialize)]
@@ -201,6 +233,15 @@ pub struct Envelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_sha256: Option<String>,
     pub computed_at: String,
+    /// UUID v4 naming this invocation's trace record.
+    pub trace_id: String,
+    /// Where the trace record went: `"database"`, `"jsonl"` or `"none"`.
+    pub trace_store: &'static str,
+    /// One pasteable line naming function@version, trace id and hashes.
+    pub citation: String,
+    /// Why the trace record could not be written; the result is unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_warning: Option<String>,
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -244,31 +285,74 @@ pub async fn invoke_hashed(call: &Call, input_sha256: String) -> Envelope {
         Err(e) => (served, Err(e)),
         Ok(calc) => (Some(calc.version), execute(calc, call).await),
     };
-    match outcome {
-        Ok((status, result)) => Envelope {
-            contract_version: CONTRACT,
-            function: call.function.clone(),
-            version,
-            producer: producer(),
-            input_sha256,
-            output_sha256: Some(digest(&canonical(&result))),
-            computed_at,
-            status,
-            result: Some(result),
-            error: None,
+    let finished_at = crate::db::now_iso();
+    let (status, result, failure) = match outcome {
+        Ok((status, result)) => (status, Some(result), None),
+        Err(e) => ("refused", None, Some(e)),
+    };
+    let output_sha256 = result.as_ref().map(|r| digest(&canonical(r)));
+    let result_id = |key: &str| {
+        result
+            .as_ref()
+            .and_then(|r| r.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    // A successful calculation that read a stored revision (the snapshot
+    // metrics) cites it even though its result does not repeat the id.
+    let revision_id = result_id("revision_id").or_else(|| {
+        result.as_ref().and_then(|_| {
+            call.input
+                .get("revision_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    });
+    let caller = call.caller.trim();
+    let invocation = trace::Invocation {
+        trace_id: crate::db::new_id(),
+        function: call.function.clone(),
+        version: version.unwrap_or("unknown").to_string(),
+        producer_version: env!("CARGO_PKG_VERSION").to_string(),
+        caller: if caller.is_empty() {
+            UNKNOWN_CALLER.to_string()
+        } else {
+            caller.to_string()
         },
-        Err(e) => Envelope {
-            contract_version: CONTRACT,
-            function: call.function.clone(),
-            version,
-            producer: producer(),
-            input_sha256,
-            output_sha256: None,
-            computed_at,
-            status: "refused",
-            result: None,
-            error: Some(json!({"code": e.code, "message": e.message})),
-        },
+        input_sha256,
+        output_sha256,
+        status: status.to_string(),
+        error_code: failure.as_ref().map(|e| e.code.to_string()),
+        revision_id,
+        report_id: result_id("report_id"),
+        input_json: trace::keep_inputs()
+            .then(|| String::from_utf8_lossy(&canonical(&call.input)).into_owned()),
+        started_at: computed_at.clone(),
+        finished_at,
+    };
+    let citation = invocation.citation();
+    let recorded = trace::record(call.database.as_deref(), &invocation).await;
+    let trace::Invocation {
+        trace_id,
+        input_sha256,
+        output_sha256,
+        ..
+    } = invocation;
+    Envelope {
+        contract_version: CONTRACT,
+        function: call.function.clone(),
+        version,
+        producer: producer(),
+        input_sha256,
+        output_sha256,
+        computed_at,
+        trace_id,
+        trace_store: recorded.store,
+        citation,
+        trace_warning: recorded.warning,
+        status,
+        result,
+        error: failure.map(|e| json!({"code": e.code, "message": e.message})),
     }
 }
 
@@ -303,6 +387,12 @@ struct ImportPeriodInput {
 #[serde(deny_unknown_fields)]
 struct RevisionInput {
     revision_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProvenanceInput {
+    trace_id: String,
 }
 
 #[derive(Deserialize)]
@@ -422,6 +512,13 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
                     .await;
             pool.close().await;
             Ok(("calculated", json!({"revisions": outcome?})))
+        }
+        "get_provenance" => {
+            let input: ProvenanceInput = parse(&call.input)?;
+            let pool = store::open(database(calc, call)?, true).await?;
+            let outcome = trace::provenance(&pool, &input.trace_id).await;
+            pool.close().await;
+            Ok(("calculated", outcome?))
         }
         "occupancy" | "economic_occupancy" | "delinquency" => {
             let input: SnapshotMetricInput = parse(&call.input)?;
@@ -878,6 +975,70 @@ pub mod schemas {
                             }
                         }
                     }
+                }
+            }
+        })
+    }
+    pub fn get_provenance_input() -> Value {
+        json!({"$schema": DRAFT, "type": "object", "additionalProperties": false,
+               "required": ["trace_id"],
+               "properties": {"trace_id": {"type": "string", "description": "trace_id from an envelope or its citation"}}})
+    }
+    pub fn get_provenance_output() -> Value {
+        let optional = |kind: &str| json!({"type": [kind, "null"]});
+        json!({
+            "$schema": DRAFT, "type": "object", "required": ["trace", "revision", "report"],
+            "properties": {
+                "trace": {
+                    "type": "object",
+                    "required": ["trace_id", "function", "version", "producer_version", "caller",
+                                 "input_sha256", "output_sha256", "status", "error_code",
+                                 "revision_id", "report_id", "input_json", "started_at", "finished_at"],
+                    "properties": {
+                        "trace_id": {"type": "string"},
+                        "function": {"type": "string"},
+                        "version": {"type": "string"},
+                        "producer_version": {"type": "string"},
+                        "caller": {"type": "string"},
+                        "input_sha256": {"type": "string"},
+                        "output_sha256": optional("string"),
+                        "status": {"enum": ["calculated", "review_required", "refused"]},
+                        "error_code": optional("string"),
+                        "revision_id": optional("string"),
+                        "report_id": optional("string"),
+                        "input_json": {"type": ["string", "null"],
+                                       "description": "Canonical input JSON; null unless the host set BOXSCORE_TRACE_INPUTS=1"},
+                        "started_at": {"type": "string"},
+                        "finished_at": {"type": "string"}
+                    }
+                },
+                "revision": {
+                    "anyOf": [{
+                        "type": "object",
+                        "required": ["id", "property", "period", "revision", "parent_id", "reason",
+                                     "input_sha256", "sources"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "property": {"type": "string"},
+                            "period": period(),
+                            "revision": {"type": "integer", "minimum": 1},
+                            "parent_id": optional("string"),
+                            "reason": optional("string"),
+                            "input_sha256": {"type": "string"},
+                            "sources": {"type": "object"}
+                        }
+                    }, {"type": "null"}]
+                },
+                "report": {
+                    "anyOf": [{
+                        "type": "object",
+                        "required": ["id", "created_at", "body_sha256"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "created_at": {"type": "string"},
+                            "body_sha256": {"type": "string"}
+                        }
+                    }, {"type": "null"}]
                 }
             }
         })

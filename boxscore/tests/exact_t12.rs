@@ -124,6 +124,7 @@ async fn run(database: Option<&Path>, input: Value) -> Envelope {
         version: None,
         input,
         database: database.map(Path::to_path_buf),
+        caller: "test".into(),
     })
     .await
 }
@@ -262,6 +263,7 @@ async fn twelve_present_periods_have_no_nulls_and_noi_matches_review_period() {
             version: None,
             input: json!({"revision_id": id}),
             database: Some(fx.db.clone()),
+            caller: "test".into(),
         })
         .await;
         let bridge = result(&review)["variance"]["noi_bridge"].clone();
@@ -613,23 +615,25 @@ async fn refusals_name_their_cause() {
 }
 
 #[tokio::test]
-async fn catalog_lists_eleven_functions_with_t12_last_and_schemas_agree() {
+async fn catalog_lists_twelve_functions_with_t12_before_get_provenance_and_schemas_agree() {
     let envelope = catalog::invoke(&Call {
         function: "describe".into(),
         version: None,
         input: json!({}),
         database: None,
+        caller: "test".into(),
     })
     .await;
     let described = result(&envelope);
     let entries = described["calculations"].as_array().unwrap();
-    assert_eq!(entries.len(), 11);
-    let last = &entries[10];
-    assert_eq!(last["name"], "t12");
-    assert_eq!(last["version"], "1.0.0");
-    assert_eq!(last["stateful"], true);
+    assert_eq!(entries.len(), 12);
+    let t12 = &entries[10];
+    assert_eq!(entries[11]["name"], "get_provenance");
+    assert_eq!(t12["name"], "t12");
+    assert_eq!(t12["version"], "1.0.0");
+    assert_eq!(t12["stateful"], true);
 
-    let schema = &last["input_schema"];
+    let schema = &t12["input_schema"];
     assert_eq!(schema["additionalProperties"], false);
     assert_eq!(schema["required"], json!(["property", "end_period"]));
     let properties = schema["properties"].as_object().unwrap();
@@ -641,7 +645,7 @@ async fn catalog_lists_eleven_functions_with_t12_last_and_schemas_agree() {
     let fx = Fixture::new().await;
     fx.seed(&[]).await;
     let out = result(&fx.t12(ask()).await);
-    let described_keys: Vec<&String> = last["output_schema"]["properties"]
+    let described_keys: Vec<&String> = t12["output_schema"]["properties"]
         .as_object()
         .unwrap()
         .keys()
