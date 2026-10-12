@@ -224,6 +224,22 @@ clients; see [connectors/claude-desktop.md](connectors/claude-desktop.md).
 `/mcp`, `POST /v1/calc/{function}`, and the contract at `/openapi.json`), with
 bearer API keys; see [connectors/remote-mcp.md](connectors/remote-mcp.md).
 
+The three connectors are held to one contract by a golden corpus in
+[`boxscore/tests/fixtures/catalog/`](../boxscore/tests/fixtures/catalog/README.md).
+`cargo test --test exact_conformance` runs every case through `catalog::invoke`,
+the MCP server and the HTTP router (`/v1/calc` and `/mcp`) and requires the same
+`result`, `status`, `error.code`, `output_sha256`, `function` and `version` from
+all of them, a match with the pinned `expected.json`, and a `result` that
+satisfies the function's output schema. Per-invocation fields (`trace_id`,
+`citation`, `computed_at`, `trace_store`, `trace_warning`) differ on every call
+and are checked for shape only. Each `expected.json` pins the function
+`version`, so a changed number under an unchanged version fails. After bumping a
+version, regenerate the affected goldens with
+`BOXSCORE_UPDATE_GOLDENS=1 cargo test --test exact_conformance` and review the
+diff; the variable only writes goldens that are missing or pin an older
+version. Adding a case is dropping `<case>.input.json` and `<case>.expected.json`
+into the function's directory, and every catalog function must have one.
+
 ### Ratios
 
 Rates are never floats. A ratio is

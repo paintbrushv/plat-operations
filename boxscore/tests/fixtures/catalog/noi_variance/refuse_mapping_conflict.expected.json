@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "ACCOUNT_MAPPING_CONFLICT"
+  },
+  "status": "refused",
+  "version": "1.0.0"
+}

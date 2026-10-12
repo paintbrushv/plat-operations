@@ -1,0 +1,14 @@
+{
+  "snapshot": {
+    "as_of_date": "2026-05-31",
+    "occupied_units": 153,
+    "vacant_units": 19,
+    "down_units": 0,
+    "market_rent_total": "0.00",
+    "in_place_rent_total": "889.50",
+    "delinquent_amount": "250.00",
+    "prepaid_amount": "40.00",
+    "concessions_amount": null
+  },
+  "unit_count": 172
+}

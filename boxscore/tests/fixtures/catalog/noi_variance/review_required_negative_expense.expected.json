@@ -1,0 +1,41 @@
+{
+  "output_sha256": "7c3bbd25716068982e58562d0a747747b1bdc0495f3b596b06f46afb39de55f4",
+  "result": {
+    "by_account": [
+      {
+        "account_code": "4000",
+        "account_name": "Rental Income",
+        "actual": "100.00",
+        "budget": "90.00",
+        "category": "rental income",
+        "variance": "10.00"
+      },
+      {
+        "account_code": "5000",
+        "account_name": "Payroll",
+        "actual": "-5.00",
+        "budget": "25.00",
+        "category": "payroll",
+        "variance": "-30.00"
+      }
+    ],
+    "noi_bridge": {
+      "actual_expenses": "-5.00",
+      "actual_noi": "105.00",
+      "actual_revenue": "100.00",
+      "budget_expenses": "25.00",
+      "budget_noi": "65.00",
+      "budget_revenue": "90.00",
+      "expense_variance": "-30.00",
+      "noi_variance": "40.00",
+      "revenue_variance": "10.00",
+      "unmapped_actual": "0.00",
+      "unmapped_budget": "0.00"
+    },
+    "review_reasons": [
+      "negative_net_expenses"
+    ]
+  },
+  "status": "review_required",
+  "version": "1.0.0"
+}

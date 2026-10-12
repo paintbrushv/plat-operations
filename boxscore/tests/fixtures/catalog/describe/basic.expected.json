@@ -1,0 +1,2774 @@
+{
+  "output_sha256": "bac11dbc879ecaa0c0ded9fdaa24c6c120054f9331cd12cf3655b4b5e227ee32",
+  "result": {
+    "adapters": [
+      {
+        "files": [
+          {
+            "description": "Actual GL rows for the period",
+            "name": "actuals",
+            "required": true,
+            "shape": "account_code,account_name,category,amount"
+          },
+          {
+            "description": "Budget GL rows for the period",
+            "name": "budgets",
+            "required": true,
+            "shape": "account_code,account_name,category,amount"
+          },
+          {
+            "description": "Occupancy and rent snapshot inside the period",
+            "name": "snapshot",
+            "required": false,
+            "shape": "JSON object: as_of_date, occupied_units, vacant_units, down_units, market_rent_total, in_place_rent_total, delinquent_amount, prepaid_amount, concessions_amount"
+          }
+        ],
+        "options": [
+          {
+            "description": "Property name, 1-120 characters",
+            "name": "property",
+            "required": true
+          },
+          {
+            "description": "Period as YYYY-MM",
+            "name": "period",
+            "required": true
+          },
+          {
+            "description": "Property unit count, a whole number",
+            "name": "units",
+            "required": true
+          }
+        ],
+        "profile": "canonical.csv/1",
+        "refuses": [
+          "INVALID_INPUT: a CSV without account_code, account_name, category, and decimal amount columns",
+          "INVALID_INPUT: units that is not a whole number",
+          "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
+          "INPUT_LIMIT: any file over 2 MiB, or more than 100000 GL rows",
+          "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
+          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+          "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
+          "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
+          "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range"
+        ],
+        "summary": "Canonical GL CSVs (decimal-string money) plus an optional snapshot JSON object; vendor exports must already be mapped to this layout."
+      },
+      {
+        "files": [
+          {
+            "description": "Canonical period dataset",
+            "name": "input",
+            "required": true,
+            "shape": "JSON object: property, period, currency, expense_convention, unit_count, actuals, budgets, snapshot"
+          }
+        ],
+        "options": [],
+        "profile": "canonical.json/1",
+        "refuses": [
+          "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
+          "INPUT_LIMIT: any file over 2 MiB, or more than 100000 GL rows",
+          "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
+          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+          "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
+          "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
+          "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range"
+        ],
+        "summary": "One canonical period dataset as JSON, the same shape as import_period's dataset."
+      }
+    ],
+    "calculations": [
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": "describe",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "adapters": {
+              "description": "Source adapters the host process can import files through; the catalog itself never reads files",
+              "items": {
+                "properties": {
+                  "files": {
+                    "items": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        },
+                        "shape": {
+                          "description": "Expected header row or document shape",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required",
+                        "description",
+                        "shape"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "options": {
+                    "items": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "required",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "profile": {
+                    "description": "Versioned adapter profile id, recorded as sources.profile on every revision it imports",
+                    "pattern": "^[a-z0-9._-]+/[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "refuses": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "profile",
+                  "summary",
+                  "files",
+                  "options",
+                  "refuses"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "calculations": {
+              "items": {
+                "properties": {
+                  "input_schema": {
+                    "type": "object"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "output_schema": {
+                    "type": "object"
+                  },
+                  "stateful": {
+                    "type": "boolean"
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "version",
+                  "summary",
+                  "stateful",
+                  "input_schema",
+                  "output_schema"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "plat.ops/1"
+            },
+            "producer": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "contract_version",
+            "producer",
+            "calculations",
+            "adapters"
+          ],
+          "type": "object"
+        },
+        "stateful": false,
+        "summary": "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
+        "version": "1.1.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "actuals": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "account_code": {
+                    "description": "Account identity; no surrounding whitespace",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "account_name": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "amount": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  },
+                  "category": {
+                    "description": "rental income, concessions, bad debt and other income are revenue; unmapped is disclosed separately; anything else is an expense",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "account_code",
+                  "account_name",
+                  "category",
+                  "amount"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "budgets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "account_code": {
+                    "description": "Account identity; no surrounding whitespace",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "account_name": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "amount": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  },
+                  "category": {
+                    "description": "rental income, concessions, bad debt and other income are revenue; unmapped is disclosed separately; anything else is an expense",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "account_code",
+                  "account_name",
+                  "category",
+                  "amount"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "currency": {
+              "const": "USD"
+            },
+            "expense_convention": {
+              "const": "positive_costs"
+            }
+          },
+          "required": [
+            "currency",
+            "expense_convention",
+            "actuals",
+            "budgets"
+          ],
+          "type": "object"
+        },
+        "name": "noi_variance",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "by_account": {
+              "items": {
+                "properties": {
+                  "account_code": {
+                    "type": "string"
+                  },
+                  "account_name": {
+                    "type": "string"
+                  },
+                  "actual": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  },
+                  "budget": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "variance": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "account_code",
+                  "account_name",
+                  "category",
+                  "actual",
+                  "budget",
+                  "variance"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "noi_bridge": {
+              "additionalProperties": {
+                "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                "type": "string"
+              },
+              "required": [
+                "actual_revenue",
+                "budget_revenue",
+                "revenue_variance",
+                "actual_expenses",
+                "budget_expenses",
+                "expense_variance",
+                "actual_noi",
+                "budget_noi",
+                "noi_variance",
+                "unmapped_actual",
+                "unmapped_budget"
+              ],
+              "type": "object"
+            },
+            "review_reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "by_account",
+            "noi_bridge",
+            "review_reasons"
+          ],
+          "type": "object"
+        },
+        "stateful": false,
+        "summary": "Actual-versus-budget NOI bridge from inline GL rows, in checked USD cents.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "dataset": {
+              "additionalProperties": false,
+              "properties": {
+                "actuals": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "account_code": {
+                        "description": "Account identity; no surrounding whitespace",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "account_name": {
+                        "maxLength": 256,
+                        "type": "string"
+                      },
+                      "amount": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "category": {
+                        "description": "rental income, concessions, bad debt and other income are revenue; unmapped is disclosed separately; anything else is an expense",
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "account_code",
+                      "account_name",
+                      "category",
+                      "amount"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 100000,
+                  "type": "array"
+                },
+                "budgets": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "account_code": {
+                        "description": "Account identity; no surrounding whitespace",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "account_name": {
+                        "maxLength": 256,
+                        "type": "string"
+                      },
+                      "amount": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "category": {
+                        "description": "rental income, concessions, bad debt and other income are revenue; unmapped is disclosed separately; anything else is an expense",
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "account_code",
+                      "account_name",
+                      "category",
+                      "amount"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 100000,
+                  "type": "array"
+                },
+                "currency": {
+                  "const": "USD"
+                },
+                "expense_convention": {
+                  "const": "positive_costs"
+                },
+                "period": {
+                  "description": "YYYY-MM",
+                  "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+                  "type": "string"
+                },
+                "property": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "snapshot": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "as_of_date": {
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                          "type": "string"
+                        },
+                        "concessions_amount": {
+                          "anyOf": [
+                            {
+                              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "delinquent_amount": {
+                          "anyOf": [
+                            {
+                              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "down_units": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "in_place_rent_total": {
+                          "anyOf": [
+                            {
+                              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "market_rent_total": {
+                          "anyOf": [
+                            {
+                              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "occupied_units": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "prepaid_amount": {
+                          "anyOf": [
+                            {
+                              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "vacant_units": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "as_of_date",
+                        "occupied_units",
+                        "vacant_units",
+                        "down_units",
+                        "market_rent_total",
+                        "in_place_rent_total",
+                        "delinquent_amount",
+                        "prepaid_amount",
+                        "concessions_amount"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit_count": {
+                  "maximum": 10000000,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "property",
+                "period",
+                "currency",
+                "expense_convention",
+                "unit_count",
+                "actuals",
+                "budgets",
+                "snapshot"
+              ],
+              "type": "object"
+            },
+            "reason": {
+              "description": "Required with supersedes",
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "sources": {
+              "description": "File names and hashes behind this dataset; recorded verbatim",
+              "type": "object"
+            },
+            "supersedes": {
+              "description": "Current revision id when this import is a correction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "dataset"
+          ],
+          "type": "object"
+        },
+        "name": "import_period",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "revision_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "revision_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "name": "review_period",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "bridge_scope": {
+              "const": "matched_accounts_only"
+            },
+            "changes": {
+              "additionalProperties": {
+                "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                "type": "string"
+              },
+              "description": "Change in each bridge value versus the superseded revision; empty for a first revision",
+              "type": "object"
+            },
+            "contract_version": {
+              "const": "plat.ops/1"
+            },
+            "correction_reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "currency": {
+              "const": "USD"
+            },
+            "excluded_accounts": {
+              "type": "array"
+            },
+            "expense_convention": {
+              "const": "positive_costs"
+            },
+            "human_approval": {
+              "const": "not_granted"
+            },
+            "input_sha256": {
+              "type": "string"
+            },
+            "period": {
+              "description": "YYYY-MM",
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            "property": {
+              "type": "string"
+            },
+            "revision_id": {
+              "type": "string"
+            },
+            "snapshot": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "as_of_date": {
+                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                      "type": "string"
+                    },
+                    "concessions_amount": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "delinquent_amount": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "down_units": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "in_place_rent_total": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "market_rent_total": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "occupied_units": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "prepaid_amount": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "vacant_units": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "as_of_date",
+                    "occupied_units",
+                    "vacant_units",
+                    "down_units",
+                    "market_rent_total",
+                    "in_place_rent_total",
+                    "delinquent_amount",
+                    "prepaid_amount",
+                    "concessions_amount"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sources": {
+              "type": "object"
+            },
+            "status": {
+              "enum": [
+                "calculated",
+                "review_required"
+              ]
+            },
+            "supersedes_revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit_count": {
+              "type": "integer"
+            },
+            "variance": {
+              "properties": {
+                "by_account": {
+                  "items": {
+                    "properties": {
+                      "account_code": {
+                        "type": "string"
+                      },
+                      "account_name": {
+                        "type": "string"
+                      },
+                      "actual": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "budget": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "category": {
+                        "type": "string"
+                      },
+                      "variance": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "account_code",
+                      "account_name",
+                      "category",
+                      "actual",
+                      "budget",
+                      "variance"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "noi_bridge": {
+                  "additionalProperties": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  },
+                  "required": [
+                    "actual_revenue",
+                    "budget_revenue",
+                    "revenue_variance",
+                    "actual_expenses",
+                    "budget_expenses",
+                    "expense_variance",
+                    "actual_noi",
+                    "budget_noi",
+                    "noi_variance",
+                    "unmapped_actual",
+                    "unmapped_budget"
+                  ],
+                  "type": "object"
+                },
+                "review_reasons": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "by_account",
+                "noi_bridge",
+                "review_reasons"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "contract_version",
+            "revision_id",
+            "property",
+            "period",
+            "currency",
+            "expense_convention",
+            "input_sha256",
+            "sources",
+            "supersedes_revision",
+            "correction_reason",
+            "changes",
+            "status",
+            "variance",
+            "bridge_scope",
+            "excluded_accounts",
+            "snapshot",
+            "unit_count",
+            "human_approval"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "Review a stored revision: matched-account NOI bridge, review reasons, excluded accounts, and changes versus the superseded revision.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "revision_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "name": "issue_report",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "bridge_scope": {
+              "const": "matched_accounts_only"
+            },
+            "changes": {
+              "additionalProperties": {
+                "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                "type": "string"
+              },
+              "description": "Change in each bridge value versus the superseded revision; empty for a first revision",
+              "type": "object"
+            },
+            "contract_version": {
+              "const": "plat.ops/1"
+            },
+            "correction_reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "currency": {
+              "const": "USD"
+            },
+            "excluded_accounts": {
+              "type": "array"
+            },
+            "expense_convention": {
+              "const": "positive_costs"
+            },
+            "human_approval": {
+              "const": "not_granted"
+            },
+            "input_sha256": {
+              "type": "string"
+            },
+            "issued_at": {
+              "type": "string"
+            },
+            "period": {
+              "description": "YYYY-MM",
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            "property": {
+              "type": "string"
+            },
+            "report_id": {
+              "type": "string"
+            },
+            "revision_id": {
+              "type": "string"
+            },
+            "snapshot": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "as_of_date": {
+                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                      "type": "string"
+                    },
+                    "concessions_amount": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "delinquent_amount": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "down_units": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "in_place_rent_total": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "market_rent_total": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "occupied_units": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "prepaid_amount": {
+                      "anyOf": [
+                        {
+                          "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                          "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "vacant_units": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "as_of_date",
+                    "occupied_units",
+                    "vacant_units",
+                    "down_units",
+                    "market_rent_total",
+                    "in_place_rent_total",
+                    "delinquent_amount",
+                    "prepaid_amount",
+                    "concessions_amount"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sources": {
+              "type": "object"
+            },
+            "status": {
+              "enum": [
+                "calculated",
+                "review_required"
+              ]
+            },
+            "supersedes_revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit_count": {
+              "type": "integer"
+            },
+            "variance": {
+              "properties": {
+                "by_account": {
+                  "items": {
+                    "properties": {
+                      "account_code": {
+                        "type": "string"
+                      },
+                      "account_name": {
+                        "type": "string"
+                      },
+                      "actual": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "budget": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "category": {
+                        "type": "string"
+                      },
+                      "variance": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "account_code",
+                      "account_name",
+                      "category",
+                      "actual",
+                      "budget",
+                      "variance"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "noi_bridge": {
+                  "additionalProperties": {
+                    "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                    "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                    "type": "string"
+                  },
+                  "required": [
+                    "actual_revenue",
+                    "budget_revenue",
+                    "revenue_variance",
+                    "actual_expenses",
+                    "budget_expenses",
+                    "expense_variance",
+                    "actual_noi",
+                    "budget_noi",
+                    "noi_variance",
+                    "unmapped_actual",
+                    "unmapped_budget"
+                  ],
+                  "type": "object"
+                },
+                "review_reasons": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "by_account",
+                "noi_bridge",
+                "review_reasons"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "contract_version",
+            "revision_id",
+            "property",
+            "period",
+            "currency",
+            "expense_convention",
+            "input_sha256",
+            "sources",
+            "supersedes_revision",
+            "correction_reason",
+            "changes",
+            "status",
+            "variance",
+            "bridge_scope",
+            "excluded_accounts",
+            "snapshot",
+            "unit_count",
+            "human_approval",
+            "report_id",
+            "issued_at"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "Issue an immutable report record for a revision. Review flags stay visible; human approval is never granted here.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "period": {
+              "description": "YYYY-MM",
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            "property": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "list_revisions",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "revisions": {
+              "items": {
+                "properties": {
+                  "created_at": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "input_sha256": {
+                    "type": "string"
+                  },
+                  "parent_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "period": {
+                    "description": "YYYY-MM",
+                    "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+                    "type": "string"
+                  },
+                  "property": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reports": {
+                    "items": {
+                      "properties": {
+                        "body_sha256": {
+                          "type": "string"
+                        },
+                        "created_at": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "body_sha256",
+                        "created_at"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "sources": {
+                    "type": "object"
+                  },
+                  "unit_count": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "property",
+                  "period",
+                  "revision",
+                  "parent_id",
+                  "reason",
+                  "unit_count",
+                  "input_sha256",
+                  "sources",
+                  "created_at",
+                  "reports"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "revisions"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "List stored revisions and their issued reports, optionally filtered by property and period.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "properties": {
+                "snapshot": false,
+                "unit_count": false
+              },
+              "required": [
+                "revision_id"
+              ]
+            },
+            {
+              "properties": {
+                "revision_id": false
+              },
+              "required": [
+                "snapshot",
+                "unit_count"
+              ]
+            }
+          ],
+          "properties": {
+            "revision_id": {
+              "description": "Use the snapshot stored with this revision; needs the host-supplied database",
+              "type": "string"
+            },
+            "snapshot": {
+              "additionalProperties": false,
+              "properties": {
+                "as_of_date": {
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                  "type": "string"
+                },
+                "concessions_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "delinquent_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "down_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "in_place_rent_total": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "market_rent_total": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "occupied_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "prepaid_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "vacant_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "as_of_date",
+                "occupied_units",
+                "vacant_units",
+                "down_units",
+                "market_rent_total",
+                "in_place_rent_total",
+                "delinquent_amount",
+                "prepaid_amount",
+                "concessions_amount"
+              ],
+              "type": "object"
+            },
+            "unit_count": {
+              "description": "Total units; occupied, vacant and down units must sum to it",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "occupancy",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "as_of_date": {
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "type": "string"
+            },
+            "down_units": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "occupancy": {
+              "additionalProperties": false,
+              "properties": {
+                "decimal": {
+                  "description": "numerator / denominator rounded half away from zero to four places, in integer arithmetic",
+                  "pattern": "^-?[0-9]+\\.[0-9]{4}$",
+                  "type": "string"
+                },
+                "denominator": {
+                  "pattern": "^-?[0-9]+$",
+                  "type": "string"
+                },
+                "numerator": {
+                  "pattern": "^-?[0-9]+$",
+                  "type": "string"
+                },
+                "scale": {
+                  "const": 4
+                }
+              },
+              "required": [
+                "numerator",
+                "denominator",
+                "decimal",
+                "scale"
+              ],
+              "type": "object"
+            },
+            "occupied_units": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "review_reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "unit_count": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "vacant_units": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "unit_count",
+            "occupied_units",
+            "vacant_units",
+            "down_units",
+            "occupancy",
+            "as_of_date",
+            "review_reasons"
+          ],
+          "type": "object"
+        },
+        "stateful": false,
+        "summary": "Physical occupancy (occupied over total units) from a stored revision's snapshot or an inline snapshot, as an exact four-place ratio.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "properties": {
+                "snapshot": false,
+                "unit_count": false
+              },
+              "required": [
+                "revision_id"
+              ]
+            },
+            {
+              "properties": {
+                "revision_id": false
+              },
+              "required": [
+                "snapshot",
+                "unit_count"
+              ]
+            }
+          ],
+          "properties": {
+            "revision_id": {
+              "description": "Use the snapshot stored with this revision; needs the host-supplied database",
+              "type": "string"
+            },
+            "snapshot": {
+              "additionalProperties": false,
+              "properties": {
+                "as_of_date": {
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                  "type": "string"
+                },
+                "concessions_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "delinquent_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "down_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "in_place_rent_total": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "market_rent_total": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "occupied_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "prepaid_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "vacant_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "as_of_date",
+                "occupied_units",
+                "vacant_units",
+                "down_units",
+                "market_rent_total",
+                "in_place_rent_total",
+                "delinquent_amount",
+                "prepaid_amount",
+                "concessions_amount"
+              ],
+              "type": "object"
+            },
+            "unit_count": {
+              "description": "Total units; occupied, vacant and down units must sum to it",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "economic_occupancy",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "as_of_date": {
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "type": "string"
+            },
+            "economic_occupancy": {
+              "additionalProperties": false,
+              "properties": {
+                "decimal": {
+                  "description": "numerator / denominator rounded half away from zero to four places, in integer arithmetic",
+                  "pattern": "^-?[0-9]+\\.[0-9]{4}$",
+                  "type": "string"
+                },
+                "denominator": {
+                  "pattern": "^-?[0-9]+$",
+                  "type": "string"
+                },
+                "numerator": {
+                  "pattern": "^-?[0-9]+$",
+                  "type": "string"
+                },
+                "scale": {
+                  "const": 4
+                }
+              },
+              "required": [
+                "numerator",
+                "denominator",
+                "decimal",
+                "scale"
+              ],
+              "type": "object"
+            },
+            "in_place_rent_total": {
+              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+              "type": "string"
+            },
+            "market_rent_total": {
+              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+              "type": "string"
+            },
+            "review_reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "market_rent_total",
+            "in_place_rent_total",
+            "economic_occupancy",
+            "as_of_date",
+            "review_reasons"
+          ],
+          "type": "object"
+        },
+        "stateful": false,
+        "summary": "Economic occupancy (in-place over market rent) from a stored revision's snapshot or an inline snapshot, as an exact four-place ratio of cents.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "properties": {
+                "snapshot": false,
+                "unit_count": false
+              },
+              "required": [
+                "revision_id"
+              ]
+            },
+            {
+              "properties": {
+                "revision_id": false
+              },
+              "required": [
+                "snapshot",
+                "unit_count"
+              ]
+            }
+          ],
+          "properties": {
+            "revision_id": {
+              "description": "Use the snapshot stored with this revision; needs the host-supplied database",
+              "type": "string"
+            },
+            "snapshot": {
+              "additionalProperties": false,
+              "properties": {
+                "as_of_date": {
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                  "type": "string"
+                },
+                "concessions_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "delinquent_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "down_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "in_place_rent_total": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "market_rent_total": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "occupied_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "prepaid_amount": {
+                  "anyOf": [
+                    {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "vacant_units": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "as_of_date",
+                "occupied_units",
+                "vacant_units",
+                "down_units",
+                "market_rent_total",
+                "in_place_rent_total",
+                "delinquent_amount",
+                "prepaid_amount",
+                "concessions_amount"
+              ],
+              "type": "object"
+            },
+            "unit_count": {
+              "description": "Total units; occupied, vacant and down units must sum to it",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "delinquency",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "as_of_date": {
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "type": "string"
+            },
+            "delinquent_amount": {
+              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+              "type": "string"
+            },
+            "delinquent_share_of_in_place_rent": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "decimal": {
+                      "description": "numerator / denominator rounded half away from zero to four places, in integer arithmetic",
+                      "pattern": "^-?[0-9]+\\.[0-9]{4}$",
+                      "type": "string"
+                    },
+                    "denominator": {
+                      "pattern": "^-?[0-9]+$",
+                      "type": "string"
+                    },
+                    "numerator": {
+                      "pattern": "^-?[0-9]+$",
+                      "type": "string"
+                    },
+                    "scale": {
+                      "const": 4
+                    }
+                  },
+                  "required": [
+                    "numerator",
+                    "denominator",
+                    "decimal",
+                    "scale"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "in_place_rent_total": {
+              "anyOf": [
+                {
+                  "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                  "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "net": {
+              "anyOf": [
+                {
+                  "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                  "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "prepaid_amount": {
+              "anyOf": [
+                {
+                  "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                  "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "prepaid_share_of_in_place_rent": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "decimal": {
+                      "description": "numerator / denominator rounded half away from zero to four places, in integer arithmetic",
+                      "pattern": "^-?[0-9]+\\.[0-9]{4}$",
+                      "type": "string"
+                    },
+                    "denominator": {
+                      "pattern": "^-?[0-9]+$",
+                      "type": "string"
+                    },
+                    "numerator": {
+                      "pattern": "^-?[0-9]+$",
+                      "type": "string"
+                    },
+                    "scale": {
+                      "const": 4
+                    }
+                  },
+                  "required": [
+                    "numerator",
+                    "denominator",
+                    "decimal",
+                    "scale"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "review_reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "delinquent_amount",
+            "prepaid_amount",
+            "net",
+            "in_place_rent_total",
+            "delinquent_share_of_in_place_rent",
+            "prepaid_share_of_in_place_rent",
+            "as_of_date",
+            "review_reasons"
+          ],
+          "type": "object"
+        },
+        "stateful": false,
+        "summary": "Delinquent and prepaid balances, their net, and each as a share of in-place rent, from a stored revision's snapshot or an inline snapshot.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "period": {
+              "description": "YYYY-MM",
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            "property": {
+              "description": "Only this property; omit for every property with a revision for the period",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "period"
+          ],
+          "type": "object"
+        },
+        "name": "close_readiness",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "period": {
+              "description": "YYYY-MM",
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            "properties": {
+              "description": "One entry per property with a revision for the period, using its latest revision",
+              "items": {
+                "properties": {
+                  "account_coverage": {
+                    "description": "Distinct account codes: in both actuals and budgets, only actuals, only budgets",
+                    "properties": {
+                      "actual_only": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "budget_only": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "matched": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "matched",
+                      "actual_only",
+                      "budget_only"
+                    ],
+                    "type": "object"
+                  },
+                  "actuals_present": {
+                    "type": "boolean"
+                  },
+                  "blocking_review_reasons": {
+                    "description": "variance.review_reasons from review_period for this revision",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "budgets_present": {
+                    "type": "boolean"
+                  },
+                  "correction_reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "is_correction": {
+                    "type": "boolean"
+                  },
+                  "issued_reports": {
+                    "items": {
+                      "properties": {
+                        "created_at": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "created_at"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "not_tracked_in_exact_store": {
+                    "description": "Readiness inputs the legacy check covers that this store does not hold",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "property": {
+                    "type": "string"
+                  },
+                  "revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "revision_id": {
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "enum": [
+                      "present",
+                      "missing",
+                      "outside_period"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "ready",
+                      "not_ready"
+                    ]
+                  }
+                },
+                "required": [
+                  "property",
+                  "revision_id",
+                  "revision",
+                  "is_correction",
+                  "correction_reason",
+                  "actuals_present",
+                  "budgets_present",
+                  "snapshot",
+                  "account_coverage",
+                  "blocking_review_reasons",
+                  "issued_reports",
+                  "status",
+                  "not_tracked_in_exact_store"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "review_reasons": {
+              "items": {
+                "enum": [
+                  "no_revisions_for_period",
+                  "properties_not_ready"
+                ]
+              },
+              "type": "array"
+            },
+            "summary": {
+              "properties": {
+                "no_revisions": {
+                  "description": "1 when no property had a revision for the period, else 0",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "not_ready": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "ready": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ready",
+                "not_ready",
+                "no_revisions"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "period",
+            "properties",
+            "summary",
+            "review_reasons"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "Per-property close readiness for a period from the exact store: latest revision, account coverage, blocking review reasons, issued reports, and what the store does not track.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "end_period": {
+              "description": "YYYY-MM",
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            "property": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision_policy": {
+              "default": "latest",
+              "description": "latest: highest revision per period; issued_only: highest revision with an issued report",
+              "enum": [
+                "latest",
+                "issued_only"
+              ]
+            }
+          },
+          "required": [
+            "property",
+            "end_period"
+          ],
+          "type": "object"
+        },
+        "name": "t12",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "actuals": {
+              "properties": {
+                "noi": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxItems": 12,
+                  "minItems": 12,
+                  "type": "array"
+                },
+                "noi_total": {
+                  "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                  "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                  "type": "string"
+                },
+                "rows": {
+                  "items": {
+                    "properties": {
+                      "category": {
+                        "type": "string"
+                      },
+                      "class": {
+                        "enum": [
+                          "revenue",
+                          "expense",
+                          "unmapped"
+                        ]
+                      },
+                      "total": {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      "values": {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                              "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "maxItems": 12,
+                        "minItems": 12,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "category",
+                      "class",
+                      "values",
+                      "total"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "unmapped": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                        "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxItems": 12,
+                  "minItems": 12,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rows",
+                "noi",
+                "noi_total",
+                "unmapped"
+              ],
+              "type": "object"
+            },
+            "budgets": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "noi": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                            "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxItems": 12,
+                      "minItems": 12,
+                      "type": "array"
+                    },
+                    "noi_total": {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "properties": {
+                          "category": {
+                            "type": "string"
+                          },
+                          "class": {
+                            "enum": [
+                              "revenue",
+                              "expense",
+                              "unmapped"
+                            ]
+                          },
+                          "total": {
+                            "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                            "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                            "type": "string"
+                          },
+                          "values": {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                                  "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "maxItems": 12,
+                            "minItems": 12,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "category",
+                          "class",
+                          "values",
+                          "total"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "unmapped": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                            "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxItems": 12,
+                      "minItems": 12,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "rows",
+                    "noi",
+                    "noi_total",
+                    "unmapped"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present only when every period with a revision has budget rows"
+            },
+            "missing_periods": {
+              "items": {
+                "description": "YYYY-MM",
+                "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "periods": {
+              "items": {
+                "description": "YYYY-MM",
+                "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+                "type": "string"
+              },
+              "maxItems": 12,
+              "minItems": 12,
+              "type": "array"
+            },
+            "property": {
+              "type": "string"
+            },
+            "review_reasons": {
+              "items": {
+                "enum": [
+                  "missing_periods",
+                  "unmapped_accounts"
+                ]
+              },
+              "type": "array"
+            },
+            "revisions": {
+              "items": {
+                "properties": {
+                  "period": {
+                    "description": "YYYY-MM",
+                    "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "revision_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "period",
+                  "revision_id",
+                  "revision"
+                ],
+                "type": "object"
+              },
+              "maxItems": 12,
+              "minItems": 12,
+              "type": "array"
+            },
+            "variance": {
+              "anyOf": [
+                {
+                  "description": "Actual minus budget NOI where both are present",
+                  "properties": {
+                    "noi": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                            "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxItems": 12,
+                      "minItems": 12,
+                      "type": "array"
+                    },
+                    "noi_total": {
+                      "description": "USD amount as a decimal string with at most two places; never a JSON number",
+                      "pattern": "^-?[0-9]{1,17}(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "noi",
+                    "noi_total"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "property",
+            "periods",
+            "revisions",
+            "actuals",
+            "budgets",
+            "variance",
+            "review_reasons",
+            "missing_periods"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "Trailing twelve-period statement for a property from stored revisions: category rows, NOI, budgets and variance per month; a month with no revision is null and flagged, never zero.",
+        "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "trace_id": {
+              "description": "trace_id from an envelope or its citation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trace_id"
+          ],
+          "type": "object"
+        },
+        "name": "get_provenance",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "report": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "body_sha256": {
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "created_at",
+                    "body_sha256"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "input_sha256": {
+                      "type": "string"
+                    },
+                    "parent_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "period": {
+                      "description": "YYYY-MM",
+                      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+                      "type": "string"
+                    },
+                    "property": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "revision": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "sources": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "property",
+                    "period",
+                    "revision",
+                    "parent_id",
+                    "reason",
+                    "input_sha256",
+                    "sources"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "trace": {
+              "properties": {
+                "caller": {
+                  "type": "string"
+                },
+                "error_code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "finished_at": {
+                  "type": "string"
+                },
+                "function": {
+                  "type": "string"
+                },
+                "input_json": {
+                  "description": "Canonical input JSON; null unless the host set BOXSCORE_TRACE_INPUTS=1",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "input_sha256": {
+                  "type": "string"
+                },
+                "output_sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "producer_version": {
+                  "type": "string"
+                },
+                "report_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "started_at": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "calculated",
+                    "review_required",
+                    "refused"
+                  ]
+                },
+                "trace_id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "trace_id",
+                "function",
+                "version",
+                "producer_version",
+                "caller",
+                "input_sha256",
+                "output_sha256",
+                "status",
+                "error_code",
+                "revision_id",
+                "report_id",
+                "input_json",
+                "started_at",
+                "finished_at"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "trace",
+            "revision",
+            "report"
+          ],
+          "type": "object"
+        },
+        "stateful": true,
+        "summary": "Read back a recorded invocation by trace_id: function, version, caller, hashes, status, and the revision and report it produced or read.",
+        "version": "1.0.0"
+      }
+    ],
+    "contract_version": "plat.ops/1",
+    "producer": {
+      "arithmetic": "checked_i64_cents",
+      "name": "boxscore-exact",
+      "version": "0.1.1"
+    }
+  },
+  "status": "calculated",
+  "version": "1.1.0"
+}

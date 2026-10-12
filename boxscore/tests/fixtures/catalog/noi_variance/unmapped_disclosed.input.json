@@ -1,0 +1,14 @@
+{
+  "currency": "USD",
+  "expense_convention": "positive_costs",
+  "actuals": [
+    {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "100.00"},
+    {"account_code": "5000", "account_name": "Payroll", "category": "payroll", "amount": "30.00"},
+    {"account_code": "9900", "account_name": "Suspense", "category": "unmapped", "amount": "4.40"}
+  ],
+  "budgets": [
+    {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "90.00"},
+    {"account_code": "5000", "account_name": "Payroll", "category": "payroll", "amount": "25.00"},
+    {"account_code": "9900", "account_name": "Suspense", "category": "unmapped", "amount": "1.10"}
+  ]
+}

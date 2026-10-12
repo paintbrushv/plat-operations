@@ -1,0 +1,16 @@
+{
+  "currency": "USD",
+  "expense_convention": "positive_costs",
+  "actuals": [
+    {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "100.10"},
+    {"account_code": "4100", "account_name": "Laundry Income", "category": "other income", "amount": "7.25"},
+    {"account_code": "5000", "account_name": "Payroll", "category": "payroll", "amount": "30.00"},
+    {"account_code": "5200", "account_name": "Repairs", "category": "repairs and maintenance", "amount": "12.5"}
+  ],
+  "budgets": [
+    {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "90.05"},
+    {"account_code": "4100", "account_name": "Laundry Income", "category": "other income", "amount": "8.00"},
+    {"account_code": "5000", "account_name": "Payroll", "category": "payroll", "amount": "25.00"},
+    {"account_code": "5200", "account_name": "Repairs", "category": "repairs and maintenance", "amount": "15.00"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "currency": "USD",
+  "expense_convention": "positive_costs",
+  "actuals": [
+    {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "100.105"}
+  ],
+  "budgets": [
+    {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "90.00"}
+  ]
+}
