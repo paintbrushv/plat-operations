@@ -1,6 +1,7 @@
-# boxscore-exact container image: the exact-cent calculation catalog, its CLI
-# and its MCP stdio server, nothing else. See docs/INSTALL.md (how to run it)
-# and docs/DATA_FLOW.md (what goes in, what is stored, what leaves).
+# boxscore-exact container image: the exact-cent calculation catalog, its CLI,
+# its MCP stdio server and its `serve` HTTP server, nothing else. Nothing
+# listens unless `serve` is started. See docs/INSTALL.md (how to run it) and
+# docs/DATA_FLOW.md (what goes in, what is stored, what leaves).
 #
 # Build from the repository root:
 #   docker build --build-arg VERSION=0.1.1 --build-arg REVISION="$(git rev-parse HEAD)" \
@@ -44,7 +45,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57
 ARG VERSION=dev
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="boxscore-exact" \
-      org.opencontainers.image.description="Checked integer-cent USD multifamily operating calculations: CLI and MCP stdio server. Local-first; no telemetry." \
+      org.opencontainers.image.description="Checked integer-cent USD multifamily operating calculations: CLI, MCP stdio server and serve HTTP server (nothing listens unless serve is started). Local-first; no telemetry." \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.source="https://github.com/paintbrushv/plat-operations" \
