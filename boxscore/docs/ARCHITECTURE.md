@@ -84,8 +84,10 @@ the OpenAPI document automatically; nothing is hand-copied into a transport.
   per line, for Claude Desktop and other local MCP clients. No network.
 - **HTTP** (`boxscore-exact serve`): MCP Streamable HTTP at `/mcp`,
   `POST /v1/calc/{function}`, `/openapi.json`, `/health`, and the OAuth
-  protected-resource metadata. Loopback only unless an API key file is given.
-  It reuses the stdio dispatcher (`mcp::Server::handle`) unchanged.
+  protected-resource metadata. Loopback only unless an API key file or OAuth
+  (RFC 7662 introspection, `exact/oauth.rs`) is configured; both sit behind
+  the async `TokenValidator` trait. It reuses the stdio dispatcher
+  (`mcp::Server::handle`) unchanged.
 
 Both call `catalog::invoke`, so the same call returns the same `result` and
 `output_sha256` on either. The conformance suite

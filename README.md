@@ -58,11 +58,14 @@ to say so when the engine refuses, and to cite the function, trace id and
 output hash with every number.
 
 `boxscore-exact serve` serves the same calculations over HTTP (MCP at `/mcp`,
-`POST /v1/calc/{function}`, an OpenAPI contract) with API keys; see
-[docs/connectors/remote-mcp.md](docs/connectors/remote-mcp.md). Today that
-works for scripts and Claude Code. The claude.ai and ChatGPT remote connectors
-authenticate with OAuth, and the sign-in side (an identity provider, IdP) is not
-built yet, so they cannot connect; that page states exactly where it stands.
+`POST /v1/calc/{function}`, an OpenAPI contract); see
+[docs/connectors/remote-mcp.md](docs/connectors/remote-mcp.md). Scripts and
+Claude Code use API keys. The claude.ai and ChatGPT remote connectors sign in
+with OAuth through your own identity provider (IdP), which the server checks
+by token introspection; that works with IdPs that offer RFC 7662
+introspection (Okta, Keycloak), not yet with Entra ID or Auth0, and the
+connector walk-throughs have not been tried against a real IdP. That page
+states exactly where it stands.
 Before you connect any assistant to real data, read what the client sends to the
 model vendor in [docs/DATA_FLOW.md](docs/DATA_FLOW.md#5-what-the-agent-client-sends-to-the-model-vendor).
 

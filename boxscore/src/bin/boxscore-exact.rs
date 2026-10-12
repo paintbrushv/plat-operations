@@ -53,7 +53,9 @@ enum Command {
     /// Serve the catalog over HTTP: MCP Streamable HTTP at /mcp, one
     /// POST /v1/calc/{function} route per catalog function, /openapi.json,
     /// /health and OAuth protected-resource metadata. Loopback only unless
-    /// --api-key-file is given. Stops on SIGINT or SIGTERM.
+    /// --api-key-file or OAuth (--authorization-server with --oauth-audience,
+    /// --oauth-client-id and --oauth-client-secret-file) is configured.
+    /// Stops on SIGINT or SIGTERM.
     Serve {
         /// IP address and port to listen on.
         #[arg(long, default_value = exact::mcp_http::DEFAULT_BIND)]
@@ -69,12 +71,30 @@ enum Command {
         /// Public URL of this server (resource identifier); default http://127.0.0.1:<port>.
         #[arg(long)]
         public_url: Option<String>,
-        /// OAuth authorization server to advertise in metadata (repeatable).
+        /// OAuth issuer: advertised in metadata and used to validate access
+        /// tokens; requires --oauth-audience, --oauth-client-id and
+        /// --oauth-client-secret-file.
         #[arg(long = "authorization-server")]
         authorization_servers: Vec<String>,
         /// Requests per minute per key.
         #[arg(long, default_value_t = exact::mcp_http::DEFAULT_RATE_LIMIT)]
         rate_limit: u32,
+        /// RFC 7662 introspection endpoint; default: read once at start-up
+        /// from <issuer>/.well-known/oauth-authorization-server.
+        #[arg(long)]
+        introspection_endpoint: Option<String>,
+        /// Client id this server presents to the introspection endpoint.
+        #[arg(long)]
+        oauth_client_id: Option<String>,
+        /// File holding that client's secret (one line, mode 0600).
+        #[arg(long)]
+        oauth_client_secret_file: Option<PathBuf>,
+        /// Value a token's `aud` must contain (or its `resource` equal).
+        #[arg(long)]
+        oauth_audience: Option<String>,
+        /// Scope a token must carry.
+        #[arg(long, value_name = "SCOPE")]
+        oauth_scope: Option<String>,
     },
     /// Create a new exact-cent database; existing paths are refused.
     Init {
@@ -365,6 +385,11 @@ async fn main() {
         public_url,
         authorization_servers,
         rate_limit,
+        introspection_endpoint,
+        oauth_client_id,
+        oauth_client_secret_file,
+        oauth_audience,
+        oauth_scope,
     } = command
     {
         let options = exact::mcp_http::ServeOptions {
@@ -375,6 +400,11 @@ async fn main() {
             public_url,
             authorization_servers,
             rate_limit,
+            introspection_endpoint,
+            oauth_client_id,
+            oauth_client_secret_file,
+            oauth_audience,
+            oauth_scope,
         };
         let code = match exact::mcp_http::serve(options, exact::mcp_http::shutdown_signal()).await {
             Ok(()) => 0,

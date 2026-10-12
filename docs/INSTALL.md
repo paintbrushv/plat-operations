@@ -40,7 +40,8 @@ SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges
 
 - `--network none`: the container has no network interface. The binary makes
   no network connection, so nothing breaks. Only `serve`, which accepts
-  connections, needs a network interface.
+  connections (and, with OAuth configured, calls the identity provider's
+  introspection endpoint), needs a network interface.
 - `--read-only`: the root filesystem is read-only. The only writable place is
   the `/data` volume you mount.
 - `--cap-drop ALL`, `--security-opt no-new-privileges`: no Linux capabilities
@@ -161,7 +162,9 @@ listens until you start it. Routes, flags and API key rules are in
 [connectors/remote-mcp.md](connectors/remote-mcp.md).
 
 Inside a container the server must bind `0.0.0.0`, and it refuses a
-non-loopback address without an API key file. Create the key file first, with
+non-loopback address without an API key file or OAuth configuration (see
+[With OAuth](#with-oauth-claudeai-and-chatgpt-connectors) below). Create the
+key file first, with
 mode 0600. On Linux, make it readable by the container user (uid 65532) and
 nobody else:
 
@@ -192,7 +195,8 @@ docker run -d --rm --name boxscore-serve \
   `--public-url https://...` (see
   [remote-mcp.md](connectors/remote-mcp.md#tls)).
 - `--network none` cannot be used here: the server needs a network interface
-  to accept connections. It still opens no outbound connection.
+  to accept connections. With API keys only, it still opens no outbound
+  connection.
 - Drop `--database /data/exact.sqlite` (and the volume) to serve only the
   stateless functions.
 - Add `-e BOXSCORE_TRACE_DIR=/data` (useful only without `--database`) or
@@ -213,6 +217,58 @@ The CI image job runs the same `serve` command with a synthetic key file and
 checks `/health`, the metadata route, the `401` challenge without a token and
 an MCP `initialize` with it. Before connecting a remote assistant, read
 [what the client sends to the model vendor](DATA_FLOW.md#5-what-the-agent-client-sends-to-the-model-vendor).
+
+### With OAuth (claude.ai and ChatGPT connectors)
+
+Claude.ai and ChatGPT connectors sign users in through your identity provider
+(IdP) and send OAuth access tokens, which `serve` checks with the IdP's token
+introspection endpoint. Set up the IdP first (the checklist, and which IdPs
+work, are in [remote-mcp.md](connectors/remote-mcp.md#oauth-21-claudeai-and-chatgpt-connectors)).
+Put the secret of the client this server uses for introspection in a 0600
+file owned by the container user, as for the key file:
+
+```bash
+(umask 077; printf '%s\n' "$INTROSPECTION_CLIENT_SECRET" > boxscore-oauth-secret)
+sudo chown 65532:65532 boxscore-oauth-secret
+```
+
+```bash
+docker run -d --rm --name boxscore-serve \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -p 127.0.0.1:3819:3819 \
+  -v boxscore-data:/data \
+  -v "$PWD/boxscore-keys:/run/secrets/boxscore-keys:ro" \
+  -v "$PWD/boxscore-oauth-secret:/run/secrets/boxscore-oauth-secret:ro" \
+  "$IMAGE" serve --bind 0.0.0.0:3819 --database /data/exact.sqlite \
+  --public-url https://boxscore.example.com \
+  --api-key-file /run/secrets/boxscore-keys \
+  --authorization-server https://idp.example.com/oauth2/default \
+  --introspection-endpoint https://idp.example.com/oauth2/default/v1/introspect \
+  --oauth-client-id boxscore-resource-server \
+  --oauth-client-secret-file /run/secrets/boxscore-oauth-secret \
+  --oauth-audience https://boxscore.example.com/mcp
+```
+
+- `--api-key-file` is optional here; keep it if scripts also call the
+  server. API keys are checked first, without calling the IdP.
+- `--introspection-endpoint` may be dropped: the server then reads it once
+  at start-up from the issuer's RFC 8414 metadata (for an issuer with a
+  path, `https://host/.well-known/oauth-authorization-server/<path>` first,
+  then `<issuer>/.well-known/oauth-authorization-server` on a `404`) and
+  refuses to start if the metadata has none.
+- The container now makes outbound HTTPS calls to the introspection
+  endpoint, so it needs a network with a route (and DNS) to the IdP;
+  `--network none` is incompatible with OAuth. See
+  [DATA_FLOW.md](DATA_FLOW.md#4-what-leaves-the-host) for exactly what is
+  sent.
+- The IdP must have a certificate from a public certificate authority: the
+  binary trusts the Mozilla root set built into it, not the host's store.
+- The Docker log gains one line naming the issuer, introspection endpoint,
+  audience and scope, and one line per failed introspection call. Tokens and
+  the client secret are never logged.
+
+This recipe has not been run against a real IdP; the server side is covered
+by `boxscore/tests/exact_mcp_http_oauth.rs` with a mock IdP.
 
 ## Volume layout
 

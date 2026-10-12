@@ -36,6 +36,8 @@ fn config(database: Option<PathBuf>) -> Config {
         public_url: PUBLIC_URL.into(),
         authorization_servers: vec!["https://idp.example.test".into()],
         rate_limit_per_minute: 60,
+        scope: mcp_http::SCOPE.into(),
+        oauth_enabled: false,
     }
 }
 
@@ -114,12 +116,18 @@ fn variance_input() -> Value {
     })
 }
 
-fn assert_challenge(reply: &Reply) {
+/// The 401 challenge for a request to `path`: on `/mcp` it names the
+/// `/mcp`-suffixed metadata document, elsewhere the unsuffixed one.
+fn assert_challenge(reply: &Reply, path: &str) {
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+    let metadata = if path == "/mcp" {
+        "/.well-known/oauth-protected-resource/mcp"
+    } else {
+        "/.well-known/oauth-protected-resource"
+    };
     assert_eq!(
         reply.headers["www-authenticate"],
-        format!("Bearer resource_metadata=\"{PUBLIC_URL}/.well-known/oauth-protected-resource\"")
-            .as_str()
+        format!("Bearer resource_metadata=\"{PUBLIC_URL}{metadata}\"").as_str()
     );
 }
 
@@ -234,7 +242,7 @@ async fn http_session_matches_the_stdio_path() {
 async fn authentication_challenges_and_public_routes() {
     let app = app();
     let missing = send(&app, post("/mcp", None, rpc(1, "ping", json!({})))).await;
-    assert_challenge(&missing);
+    assert_challenge(&missing, "/mcp");
     let wrong = send(
         &app,
         post(
@@ -244,16 +252,19 @@ async fn authentication_challenges_and_public_routes() {
         ),
     )
     .await;
-    assert_challenge(&wrong);
+    assert_challenge(&wrong, "/mcp");
     // Missing and wrong tokens get byte-identical responses.
     assert_eq!(missing.body, wrong.body);
     let mut basic = post("/v1/calc/describe", None, "");
     basic
         .headers_mut()
         .insert("authorization", format!("Basic {SECRET}").parse().unwrap());
-    assert_challenge(&send(&app, basic).await);
+    assert_challenge(&send(&app, basic).await, "/v1/calc/describe");
     // A key id is not a secret.
-    assert_challenge(&send(&app, post("/v1/calc/describe", Some("ci"), "")).await);
+    assert_challenge(
+        &send(&app, post("/v1/calc/describe", Some("ci"), "")).await,
+        "/v1/calc/describe",
+    );
 
     let ok = send(&app, post("/mcp", Some(SECRET), rpc(1, "ping", json!({})))).await;
     assert_eq!(ok.status, StatusCode::OK);
@@ -630,7 +641,8 @@ async fn openapi_document_is_the_catalog() {
         let pointer = reference.strip_prefix('#').unwrap();
         assert!(doc.pointer(pointer).is_some(), "{reference}");
     }
-    // The document is the same however the server is configured, apart from servers.
+    // An API-key-only server serves the configuration-independent document,
+    // apart from servers.
     assert_eq!(mcp_http::openapi(PUBLIC_URL), doc);
 }
 
@@ -649,8 +661,8 @@ fn collect_refs(value: &Value, out: &mut Vec<String>) {
     }
 }
 
-#[test]
-fn start_up_refusals() {
+#[tokio::test]
+async fn start_up_refusals() {
     let dir = tempfile::tempdir().unwrap();
 
     // Non-loopback without a key file.
@@ -709,8 +721,8 @@ fn start_up_refusals() {
     assert!(!addr.ip().is_loopback());
     assert_eq!(config.public_url, PUBLIC_URL);
     let validator = config.validator.unwrap();
-    assert_eq!(validator.validate(SECRET).unwrap().subject, "ci");
-    assert_eq!(validator.validate(SECRET).unwrap().method, "api_key");
+    assert_eq!(validator.validate(SECRET).await.unwrap().subject, "ci");
+    assert_eq!(validator.validate(SECRET).await.unwrap().method, "api_key");
 
     // World-readable key file refuses to start.
     #[cfg(unix)]
@@ -820,7 +832,7 @@ async fn real_socket_serves_and_stops_on_sigterm() {
         .to_string();
     assert_eq!(
         challenge,
-        format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource\"")
+        format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource/mcp\"")
     );
 
     let init: Value = client

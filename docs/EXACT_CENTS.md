@@ -222,7 +222,8 @@ server over stdio, one tool per function, for Claude Desktop and other MCP
 clients; see [connectors/claude-desktop.md](connectors/claude-desktop.md).
 `boxscore-exact serve` serves the catalog over HTTP (MCP Streamable HTTP at
 `/mcp`, `POST /v1/calc/{function}`, and the contract at `/openapi.json`), with
-bearer API keys; see [connectors/remote-mcp.md](connectors/remote-mcp.md).
+bearer API keys or OAuth 2.1 access tokens checked by introspection; see
+[connectors/remote-mcp.md](connectors/remote-mcp.md).
 
 The three connectors are held to one contract by a golden corpus in
 [`boxscore/tests/fixtures/catalog/`](../boxscore/tests/fixtures/catalog/README.md).
