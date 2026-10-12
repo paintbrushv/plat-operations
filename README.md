@@ -14,16 +14,17 @@ chatbot, a dashboard toy, or a reporting generator.
 
 ## Run it without a toolchain
 
-The exact-cent producer (`boxscore-exact`, including its MCP stdio server) is
-packaged as a container image: one binary on a distroless base, non-root, no
-shell, nothing listening, no network needed.
+The exact-cent producer (`boxscore-exact`, including its MCP stdio and HTTP
+servers) is packaged as a container image: one binary on a distroless base,
+non-root, no shell. Nothing listens unless you start `serve`, and nothing
+else needs a network.
 
 ```bash
 docker run --rm ghcr.io/paintbrushv/plat-operations:0.1.1   # prints the calculation catalog
 ```
 
 [docs/INSTALL.md](docs/INSTALL.md) has the `init` / `import-csv` / `review` /
-`mcp` commands and a Claude Desktop configuration;
+`mcp` / `serve` commands and a Claude Desktop configuration;
 [docs/DATA_FLOW.md](docs/DATA_FLOW.md) is the data-flow description for IT
 review.
 

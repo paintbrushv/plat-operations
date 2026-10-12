@@ -62,11 +62,15 @@ USER 65532:65532
 WORKDIR /data
 VOLUME ["/data"]
 
-# Nothing listens by default, so there is no EXPOSE. When `serve` ships, the
-# default command becomes the one-line change below (plus an EXPOSE line):
-#   CMD ["serve", "--bind", "0.0.0.0:<port>", "--api-key-file", "/run/secrets/<key-file>"]
-# (inside a container the server must bind 0.0.0.0; keep it on loopback at the
-# host with `-p 127.0.0.1:<port>:<port>`).
+# Nothing listens by default, so there is no EXPOSE. The HTTP server runs only
+# when the operator starts it explicitly, with a key file mounted read-only:
+#   docker run --rm -p 127.0.0.1:3819:3819 \
+#     -v "$PWD/boxscore-keys:/run/secrets/boxscore-keys:ro" IMAGE \
+#     serve --bind 0.0.0.0:3819 --api-key-file /run/secrets/boxscore-keys
+# Inside a container it must bind 0.0.0.0 (a non-loopback bind is refused
+# without --api-key-file); publish it to host loopback only
+# (`-p 127.0.0.1:3819:3819`) and put any wider exposure behind a TLS proxy.
+# See docs/INSTALL.md.
 ENTRYPOINT ["/usr/local/bin/boxscore-exact"]
 # Stateless: prints the catalog envelope (status "calculated") and exits 0.
 CMD ["call", "--function", "describe"]
