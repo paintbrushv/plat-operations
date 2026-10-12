@@ -10,10 +10,16 @@ on:
     branches: [main]
     paths:
       - 'boxscore/**'
+      - 'QUICKSTART.md'
+      - 'docs/quickstart/**'
+      - 'scripts/quickstart_check.sh'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'boxscore/**'
+      - 'QUICKSTART.md'
+      - 'docs/quickstart/**'
+      - 'scripts/quickstart_check.sh'
       - '.github/workflows/ci.yml'
 
 # Cancel superseded runs on the same ref to save minutes.
@@ -99,3 +105,27 @@ jobs:
       - name: Conformance suite
         if: steps.changes.outputs.run == 'true'
         run: cargo test --test exact_conformance
+
+  # The quickstart cannot rot: build the release binary and run every
+  # native-binary command of QUICKSTART.md against the synthetic files in
+  # docs/quickstart/, asserting the numbers the document quotes.
+  quickstart:
+    name: quickstart · native commands
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: boxscore
+
+      - name: Build boxscore-exact (release)
+        working-directory: boxscore
+        run: cargo build --locked --release --bin boxscore-exact
+
+      - name: Run the quickstart
+        run: scripts/quickstart_check.sh

@@ -1,0 +1,11 @@
+account_code,account_name,category,amount
+4000,Gross Potential Rent,rental income,36000.00
+4010,Concessions,concessions,-1200.00
+4020,Bad Debt,bad debt,-600.00
+4100,Other Income,other income,900.00
+5000,Payroll,payroll,8000.00
+5100,Repairs and Maintenance,repairs and maintenance,3500.00
+5200,Utilities,utilities,2600.00
+5300,Insurance,insurance,1500.00
+5400,Property Taxes,property taxes,4000.00
+5500,Management Fee,management fee,1800.00
