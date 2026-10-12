@@ -1,0 +1,11 @@
+{
+  "as_of_date": "2026-05-31",
+  "occupied_units": 21,
+  "vacant_units": 2,
+  "down_units": 1,
+  "market_rent_total": "38400.00",
+  "in_place_rent_total": "36000.00",
+  "delinquent_amount": "1500.00",
+  "prepaid_amount": "300.00",
+  "concessions_amount": "1200.00"
+}
