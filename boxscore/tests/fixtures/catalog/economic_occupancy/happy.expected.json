@@ -1,0 +1,17 @@
+{
+  "output_sha256": "74fc709027dc15641b5c54bb62410293d477687950b15958f33133b1f9d70489",
+  "result": {
+    "as_of_date": "2026-05-31",
+    "economic_occupancy": {
+      "decimal": "0.8895",
+      "denominator": "100000",
+      "numerator": "88950",
+      "scale": 4
+    },
+    "in_place_rent_total": "889.50",
+    "market_rent_total": "1000.00",
+    "review_reasons": []
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

@@ -1,0 +1,55 @@
+{
+  "output_sha256": "9d74ffd076b4219131834ac629647a2072d3cf68b53974887d439cc218b9a099",
+  "result": {
+    "by_account": [
+      {
+        "account_code": "4000",
+        "account_name": "Rental Income",
+        "actual": "100.10",
+        "budget": "90.05",
+        "category": "rental income",
+        "variance": "10.05"
+      },
+      {
+        "account_code": "4100",
+        "account_name": "Laundry Income",
+        "actual": "7.25",
+        "budget": "8.00",
+        "category": "other income",
+        "variance": "-0.75"
+      },
+      {
+        "account_code": "5000",
+        "account_name": "Payroll",
+        "actual": "30.00",
+        "budget": "25.00",
+        "category": "payroll",
+        "variance": "5.00"
+      },
+      {
+        "account_code": "5200",
+        "account_name": "Repairs",
+        "actual": "12.50",
+        "budget": "15.00",
+        "category": "repairs and maintenance",
+        "variance": "-2.50"
+      }
+    ],
+    "noi_bridge": {
+      "actual_expenses": "42.50",
+      "actual_noi": "64.85",
+      "actual_revenue": "107.35",
+      "budget_expenses": "40.00",
+      "budget_noi": "58.05",
+      "budget_revenue": "98.05",
+      "expense_variance": "2.50",
+      "noi_variance": "6.80",
+      "revenue_variance": "9.30",
+      "unmapped_actual": "0.00",
+      "unmapped_budget": "0.00"
+    },
+    "review_reasons": []
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

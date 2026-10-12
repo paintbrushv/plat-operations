@@ -55,3 +55,47 @@ jobs:
 
       - name: Doc tests
         run: cargo test --doc
+
+  # Connector conformance: the catalog, MCP stdio and HTTP transports must
+  # return identical envelopes for the golden corpus. Runs only on pull
+  # requests that touch the exact-cent code, the corpus or its driver; the
+  # `test` job above already runs it as part of `cargo test --all-targets`.
+  conformance:
+    name: conformance · catalog connectors
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: boxscore
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect connector, catalog or corpus changes
+        id: changes
+        working-directory: .
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git diff --name-only "origin/${BASE_REF}...HEAD" \
+            | grep -Eq '^boxscore/(src/exact/|tests/fixtures/catalog/|tests/exact_conformance\.rs$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under boxscore/src/exact/, the corpus or its driver; skipping."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.changes.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        if: steps.changes.outputs.run == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: boxscore
+
+      - name: Conformance suite
+        if: steps.changes.outputs.run == 'true'
+        run: cargo test --test exact_conformance

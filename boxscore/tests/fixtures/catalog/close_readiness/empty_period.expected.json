@@ -1,0 +1,17 @@
+{
+  "output_sha256": "f6e5e3c7f3c72f7f1224ed4de23c36123586fb5b340dfc2964366f735feace93",
+  "result": {
+    "period": "2026-05",
+    "properties": [],
+    "review_reasons": [
+      "no_revisions_for_period"
+    ],
+    "summary": {
+      "no_revisions": 1,
+      "not_ready": 0,
+      "ready": 0
+    }
+  },
+  "status": "review_required",
+  "version": "1.0.0"
+}

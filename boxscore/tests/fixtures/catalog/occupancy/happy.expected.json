@@ -1,0 +1,19 @@
+{
+  "output_sha256": "5e700dc497acc80f1fedd8b9915e584a6dfdfe8fa9e38def57c1f9a7fbfcc470",
+  "result": {
+    "as_of_date": "2026-05-31",
+    "down_units": 0,
+    "occupancy": {
+      "decimal": "0.8895",
+      "denominator": "172",
+      "numerator": "153",
+      "scale": 4
+    },
+    "occupied_units": 153,
+    "review_reasons": [],
+    "unit_count": 172,
+    "vacant_units": 19
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

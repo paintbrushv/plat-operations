@@ -1,0 +1,47 @@
+{
+  "output_sha256": "e79c19f2f37306c782f14f391f0939b4cc17d586dead712ff5bfdd1207ffd3ba",
+  "result": {
+    "by_account": [
+      {
+        "account_code": "4000",
+        "account_name": "Rental Income",
+        "actual": "100.00",
+        "budget": "90.00",
+        "category": "rental income",
+        "variance": "10.00"
+      },
+      {
+        "account_code": "5000",
+        "account_name": "Payroll",
+        "actual": "30.00",
+        "budget": "25.00",
+        "category": "payroll",
+        "variance": "5.00"
+      },
+      {
+        "account_code": "9900",
+        "account_name": "Suspense",
+        "actual": "4.40",
+        "budget": "1.10",
+        "category": "unmapped",
+        "variance": "3.30"
+      }
+    ],
+    "noi_bridge": {
+      "actual_expenses": "30.00",
+      "actual_noi": "70.00",
+      "actual_revenue": "100.00",
+      "budget_expenses": "25.00",
+      "budget_noi": "65.00",
+      "budget_revenue": "90.00",
+      "expense_variance": "5.00",
+      "noi_variance": "5.00",
+      "revenue_variance": "10.00",
+      "unmapped_actual": "4.40",
+      "unmapped_budget": "1.10"
+    },
+    "review_reasons": []
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

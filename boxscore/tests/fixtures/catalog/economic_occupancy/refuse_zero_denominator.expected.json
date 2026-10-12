@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "ZERO_DENOMINATOR"
+  },
+  "status": "refused",
+  "version": "1.0.0"
+}
