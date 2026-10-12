@@ -29,6 +29,17 @@ docker run --rm $SAFE -v boxscore-data:/data -v "$PWD/docs/quickstart:/in:ro" "$
   --snapshot /in/snapshot.json --property "Sample Gardens" --period 2026-05 --units 24   # 3. import it
 ```
 
+> **No published image yet.** Until the first tagged release is published to
+> GHCR (the publish job runs only on a `v*` tag), build the image locally from
+> the repository root and use it (`IMAGE=boxscore-exact:local`) instead. The
+> build command is the one in the Dockerfile header, and the image CI check
+> (`scripts/check_image.py`) builds and checks the image the same way:
+>
+> ```bash
+> docker build --build-arg VERSION=0.1.1 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> IMAGE=boxscore-exact:local
+> ```
+
 The [QUICKSTART](QUICKSTART.md) continues from here: review the period, connect
 Claude Desktop, ask why NOI missed budget, and verify the citation. It also has
 the no-Docker path (build the binary with Rust). [docs/INSTALL.md](docs/INSTALL.md)
