@@ -5,6 +5,7 @@ pub mod mcp;
 pub mod mcp_http;
 pub mod migration;
 pub mod money;
+pub mod oauth;
 pub mod protocol;
 pub mod ratio;
 pub mod readiness;

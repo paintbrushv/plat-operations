@@ -25,8 +25,8 @@ Each claim is marked with how it is backed:
 
 | question | answer | backed by |
 |---|---|---|
-| Does it listen on a port? | Not by default. No `EXPOSE`; the default command and every subcommand except `serve` open no socket. `serve` listens only when you start it, refuses a non-loopback address without an API key file, and the documented setup publishes it to host loopback only. See section 4. | [CI] every other check runs with `--network none`; the `serve` check publishes to `127.0.0.1` only; [tests]; [stated] |
-| Does it connect out? | No. No telemetry, no update check, no crash reporting. `serve` answers requests and opens no connection of its own. | [CI] every check except `serve` runs with `--network none`; [stated] |
+| Does it listen on a port? | Not by default. No `EXPOSE`; the default command and every subcommand except `serve` open no socket. `serve` listens only when you start it, refuses a non-loopback address without an API key file or OAuth configuration, and the documented setup publishes it to host loopback only. See section 4. | [CI] every other check runs with `--network none`; the `serve` check publishes to `127.0.0.1` only; [tests]; [stated] |
+| Does it connect out? | No telemetry, no update check, no crash reporting. One exception, only when you configure OAuth on `serve`: it calls your identity provider's token introspection endpoint to check bearer tokens that are not API keys (and, without `--introspection-endpoint`, reads the provider's metadata once at start-up). Nothing else. | [CI] every check except `serve` runs with `--network none`; [tests]; [stated] |
 | Where is data stored? | One SQLite file you name, on the `/data` volume, mode 0600, which also holds the invocation trace. Without a database, a JSONL trace file (mode 0600) only if you set `BOXSCORE_TRACE_DIR`. | [CI] for the database; [tests] and [stated] for the trace file |
 | What else does it write? | Nothing. The root filesystem can be read-only. | [CI] runs with `--read-only`, `serve` included |
 | Does it run as root? | No: uid/gid 65532. No shell in the image. | [CI] |
@@ -166,8 +166,10 @@ arithmetic, overflow refusal and immutability]
 
 ## 4. What leaves the host
 
-The container itself opens no connection. With `serve` running, results go
-back only as responses to the requests it receives.
+The container opens no connection of its own, with one exception that you
+switch on: `serve` with OAuth configured calls your identity provider (see
+**Outbound connections** below). With `serve` running, results go back only
+as responses to the requests it receives.
 
 **Listeners: none by default.** The image declares no `EXPOSE`, and the
 default command and every subcommand except `serve` open no socket. `mcp`
@@ -176,9 +178,9 @@ check except the `serve` check, including the stdio MCP session, runs with
 `--network none`, so none of them needs a network; stated: the only socket
 code reachable from `boxscore/src/bin/boxscore-exact.rs` and
 `boxscore/src/exact/` is the HTTP listener in
-`boxscore/src/exact/mcp_http.rs`, which `main` starts only for `serve`; that
-file uses `reqwest` only to parse URLs (`reqwest::Url`) and builds no
-network client]
+`boxscore/src/exact/mcp_http.rs`, which `main` starts only for `serve`, and
+the OAuth introspection client in `boxscore/src/exact/oauth.rs`, which
+`serve` builds only when OAuth is configured]
 
 **`serve`, only when you start it.** `boxscore-exact serve` is the HTTP
 server for the catalog (MCP Streamable HTTP and a JSON API; see
@@ -187,43 +189,80 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
 - It listens only when started explicitly with `serve`. Its default address
   is `127.0.0.1:3819`. [stated: `boxscore/src/bin/boxscore-exact.rs`]
 - It refuses to bind a non-loopback address, or to advertise a non-loopback
-  `--public-url`, unless an API key file is given with `--api-key-file`. It
-  refuses a key file that other users can read or write. [tests:
-  `boxscore/tests/exact_mcp_http.rs`] Inside a container it must bind
-  `0.0.0.0`, so the key file is required there; publish the port to the host
+  `--public-url`, unless at least one validator is configured: an API key
+  file (`--api-key-file`), OAuth (`--authorization-server` with
+  `--oauth-audience`, `--oauth-client-id` and `--oauth-client-secret-file`),
+  or both. It refuses a key file or OAuth client secret file that other
+  users can read or write, and any inconsistent combination of OAuth flags.
+  [tests: `boxscore/tests/exact_mcp_http.rs`,
+  `boxscore/tests/exact_mcp_http_oauth.rs`] Inside a container it must bind
+  `0.0.0.0`, so a validator is required there; publish the port to the host
   loopback only (`-p 127.0.0.1:3819:3819`). [CI: the `serve` check runs it
   this way, with a 0600 key file mounted read-only; it runs the container as
   the CI user that owns that file, because handing the file to uid 65532
   needs root on the host (INSTALL.md does that with `chown`)]
 - `/health`, `/openapi.json` and the OAuth protected-resource metadata
-  (`/.well-known/oauth-protected-resource`) answer without authentication.
-  With a key file, everything else (`/mcp`, `/v1/calc/{function}`) needs
-  `Authorization: Bearer <secret>`; a missing or wrong token gets `401` with
-  a `WWW-Authenticate` challenge. A loopback server started without a key
-  file asks for no token. [CI: `/health` and the metadata answer `200`
-  without a token, `POST /mcp` without one gets the `401` challenge and with
-  one completes `initialize`; tests: `boxscore/tests/exact_mcp_http.rs`]
+  (`/.well-known/oauth-protected-resource` and its `/mcp` variant) answer
+  without authentication. With a validator, everything else (`/mcp`,
+  `/v1/calc/{function}`) needs `Authorization: Bearer <token>`: an API key or
+  an OAuth access token. A missing or refused token gets `401` with a
+  `WWW-Authenticate` challenge; an OAuth token without the required scope
+  gets `403`. A loopback server started without a validator asks for no
+  token. [CI: `/health` and the metadata answer `200` without a token,
+  `POST /mcp` without one gets the `401` challenge and with an API key
+  completes `initialize`; tests: `boxscore/tests/exact_mcp_http.rs`,
+  `boxscore/tests/exact_mcp_http_oauth.rs`]
 - A request whose `Origin` header is not on the `--allow-origin` allowlist
-  (empty by default) gets `403`, on every route. Each key is rate-limited
-  (`--rate-limit`, default 60 requests a minute; `429` with `Retry-After`).
-  Request bodies over 2 MiB get `413`. [tests:
-  `boxscore/tests/exact_mcp_http.rs`]
+  (empty by default) gets `403`, on every route. Each caller (API key or
+  OAuth subject) is rate-limited (`--rate-limit`, default 60 requests a
+  minute; `429` with `Retry-After`). Request bodies over 2 MiB get `413`.
+  [tests: `boxscore/tests/exact_mcp_http.rs`]
 - It speaks plain HTTP. Terminate TLS at a reverse proxy in front of it.
   [stated]
-- It has no outbound connections of its own: it answers requests and never
-  opens one. An `--authorization-server` URL is only advertised in the
-  metadata, never contacted. [stated: `boxscore/src/exact/mcp_http.rs`]
 - The database path comes from its command line, never from a request.
   [tests: `boxscore/tests/exact_mcp_http.rs`]
 
-**Outbound connections: none.** No telemetry, no analytics, no update check,
-no crash reporting, no DNS lookups, no licence server. [CI: every check
-except `serve` passes with `--network none`; stated: as above] Run with
-`--network none` (as the [INSTALL.md](INSTALL.md) examples do for every
-command except `serve`) and the kernel enforces it. A `serve` container needs
-a network interface to accept connections, so for it this is [stated], not
-enforced by `--network none`; use a host firewall rule if you need it
-enforced.
+**Outbound connections: none, except OAuth token introspection when you
+configure it.** No telemetry, no analytics, no update check, no crash
+reporting, no licence server. [CI: every check except `serve` passes with
+`--network none`; stated: as above]
+
+`serve` with OAuth configured makes exactly one kind of outbound connection:
+an HTTPS `POST` to the token introspection endpoint of the identity provider
+you named (`--introspection-endpoint`, or the `introspection_endpoint` in
+that provider's metadata). [tests: `boxscore/tests/exact_mcp_http_oauth.rs`;
+stated: `boxscore/src/exact/oauth.rs`]
+
+- **When:** only when a request carries a bearer token that is not one of the
+  static API keys, and no cached verdict for that token is still valid
+  (accepted tokens are cached until their expiry, at most 5 minutes;
+  refused ones for 30 seconds). API key requests, requests without a token
+  and public routes never cause one. Without `--introspection-endpoint`, the
+  server also reads the issuer's RFC 8414 metadata at start-up to find the
+  endpoint (one `GET`, or two when an issuer with a path serves it only at
+  `<issuer>/.well-known/oauth-authorization-server`), and none afterwards.
+- **What is sent:** the bearer token, `token_type_hint=access_token`, and the
+  server's own client id and secret (HTTP Basic). No request body, tool
+  argument, result, database content or caller address is sent.
+- **What comes back:** the provider's verdict on the token (`active`, `exp`,
+  `aud`, `scope`, `sub`, ...). The subject (`sub`, else `client_id`) is
+  recorded as the trace caller `http:oauth:<subject>` in the database.
+- **Limits:** 5-second timeout, no redirects followed, `https` required
+  except to a loopback host, at most 64 KiB read back. The server makes at
+  most 16 concurrent and 120 per minute introspection calls; anything beyond
+  answers `503` without a call. The environment's
+  `HTTPS_PROXY`/`HTTP_PROXY` apply. Neither the token nor the secret is
+  logged; a failed call logs one line naming the endpoint and the kind of
+  failure, at most one every 10 seconds.
+
+Run with `--network none` (as the [INSTALL.md](INSTALL.md) examples do for
+every command except `serve`) and the kernel enforces "no connections". A
+`serve` container needs a network interface to accept connections, so for it
+this is [stated], not enforced by `--network none`; use a host firewall rule
+that allows only the introspection endpoint (OAuth) or nothing (API keys
+only) if you need it enforced. `--network none` is incompatible with OAuth in
+any case: the server could not reach the introspection endpoint, and every
+OAuth request would get `503`.
 
 **Files written: only the database** (and its transient journal), the JSONL
 trace file `invocations.jsonl` when `BOXSCORE_TRACE_DIR` is set and no
@@ -254,8 +293,9 @@ limit it. [stated]
 With a remote connector (claude.ai or ChatGPT through `serve`), the vendor's
 servers call your endpoint, so the endpoint must be reachable from them; see
 [connectors/remote-mcp.md](connectors/remote-mcp.md), which also explains
-that those connectors authenticate with OAuth, which the server does not yet
-accept (stage 2b). [stated]
+that those connectors sign users in with OAuth through your identity
+provider, and that the claude.ai and ChatGPT walk-throughs there have not
+been tried against a real provider. [stated]
 
 How to limit what reaches the vendor:
 

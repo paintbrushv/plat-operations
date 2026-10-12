@@ -13,14 +13,16 @@
 //!   `GET /.well-known/oauth-protected-resource` (RFC 9728) are public.
 //!
 //! Everything else needs `Authorization: Bearer <token>`, checked by a
-//! [`TokenValidator`]. Stage 2a ships [`StaticKeys`] (API keys for scripts);
-//! OAuth 2.1 access tokens from an external authorization server (stage 2b)
-//! slot in behind the same trait. A server without a validator answers
-//! loopback only: [`prepare`] refuses to bind anything else.
+//! [`TokenValidator`]: [`StaticKeys`] (API keys for scripts) and, for
+//! claude.ai and ChatGPT connectors, OAuth 2.1 access tokens checked by RFC
+//! 7662 introspection against the configured authorization server
+//! ([`oauth::IntrospectionValidator`]). When both are configured the static
+//! keys are tried first ([`ValidatorChain`]). A server without a validator
+//! answers loopback only: [`prepare`] refuses to bind anything else.
 //!
 //! The database path comes from the command line, never from a request. The
 //! server writes no artifacts and logs no request content, token or principal.
-use super::{catalog, digest, mcp, protocol::MAX_REQUEST_BYTES};
+use super::{catalog, digest, mcp, oauth, protocol::MAX_REQUEST_BYTES};
 use axum::{
     body::Bytes,
     extract::{rejection::BytesRejection, DefaultBodyLimit, Path, Query, Request, State},
@@ -45,6 +47,12 @@ pub const DEFAULT_BIND: &str = "127.0.0.1:3819";
 pub const DEFAULT_RATE_LIMIT: u32 = 60;
 pub const SCOPE: &str = "boxscore:calc";
 pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
+/// The RFC 9728 path-suffixed variant for clients that use the MCP endpoint
+/// (`<public-url>/mcp`) as the resource identifier.
+pub const METADATA_MCP_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
+/// Seconds a client is asked to wait when the authorization server cannot be
+/// reached (`503 Retry-After`).
+pub const AUTH_UNAVAILABLE_RETRY_SECONDS: u64 = 5;
 /// Shortest accepted API-key secret, in characters.
 pub const MIN_SECRET_LEN: usize = 32;
 const MAX_KEY_FILE_BYTES: u64 = 1024 * 1024;
@@ -56,14 +64,27 @@ const INVALID_REQUEST: i64 = -32600;
 // Authentication
 // ---------------------------------------------------------------------------
 
-/// Who made a request. Never logged; carried to the handler only so the
-/// call record can name the caller once the catalog has a `caller` field.
+/// Who made a request. Never logged; carried to the handler so the call
+/// record can name the caller ([`Principal::caller`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
     pub subject: String,
-    /// `"api_key"` for [`StaticKeys`]; `"none"` when the server runs without
-    /// a validator on loopback.
+    /// `"api_key"` for [`StaticKeys`], `"oauth"` for an introspected access
+    /// token; `"none"` when the server runs without a validator on loopback.
     pub method: &'static str,
+}
+
+impl Principal {
+    /// The trace caller and rate-limit key: `http:<key_id>` for an API key
+    /// (`http:local` without a validator), `http:oauth:<subject>` for an
+    /// OAuth access token. Key ids cannot contain `:`, so the two never
+    /// collide.
+    pub fn caller(&self) -> String {
+        match self.method {
+            "oauth" => format!("http:oauth:{}", self.subject),
+            _ => format!("http:{}", self.subject),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,12 +93,41 @@ pub enum AuthError {
     Missing,
     /// A token was presented and not accepted.
     Invalid,
+    /// The token is valid but lacks the required scope (`403`).
+    InsufficientScope,
+    /// The token could not be checked: the authorization server was
+    /// unreachable or answered something unusable (`503`, not `401`).
+    Unavailable,
 }
 
-/// Turns a bearer token into a [`Principal`]. Stage 2b adds an OAuth 2.1
-/// access-token validator behind this same seam.
+/// Turns a bearer token into a [`Principal`]. Implemented by [`StaticKeys`]
+/// and [`oauth::IntrospectionValidator`]. Local JWT validation against the
+/// authorization server's JWKS (what Microsoft Entra ID and Auth0 need) would
+/// be a third implementation behind this seam; it is not written.
+#[allow(clippy::double_must_use)] // async_trait adds must_use to an already must_use Future.
+#[async_trait::async_trait]
 pub trait TokenValidator: Send + Sync {
-    fn validate(&self, token: &str) -> Result<Principal, AuthError>;
+    async fn validate(&self, token: &str) -> Result<Principal, AuthError>;
+}
+
+/// Several validators tried in order: the first that accepts the token wins.
+/// When none does, the last validator's error is returned, so with
+/// `[StaticKeys, IntrospectionValidator]` a token that is not an API key gets
+/// the introspection verdict (`401`, `403` or `503`).
+pub struct ValidatorChain(pub Vec<Arc<dyn TokenValidator>>);
+
+#[async_trait::async_trait]
+impl TokenValidator for ValidatorChain {
+    async fn validate(&self, token: &str) -> Result<Principal, AuthError> {
+        let mut last = AuthError::Invalid;
+        for validator in &self.0 {
+            match validator.validate(token).await {
+                Ok(principal) => return Ok(principal),
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
+    }
 }
 
 struct StaticKey {
@@ -100,7 +150,7 @@ impl std::fmt::Debug for StaticKeys {
     }
 }
 
-fn sha256(bytes: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
@@ -189,52 +239,12 @@ impl StaticKeys {
     /// Load a key file. On unix the file must not be accessible to other
     /// users (mode 0600 expected); a world-readable file refuses to start.
     pub fn from_file(path: &FsPath) -> Result<Self, StartError> {
-        use std::io::Read;
-        let metadata =
-            std::fs::metadata(path).map_err(|_| StartError::new("API key file cannot be read"))?;
-        if !metadata.is_file() {
-            return Err(StartError::new("API key file is not a regular file"));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = metadata.permissions().mode();
-            if mode & 0o007 != 0 {
-                return Err(StartError::new(format!(
-                    "API key file is accessible to other users (mode {:o}); run chmod 600 on it",
-                    mode & 0o777
-                )));
-            }
-            if mode & 0o070 != 0 {
-                eprintln!(
-                    "boxscore-exact serve: warning: API key file is group-accessible (mode {:o}); 0600 is expected",
-                    mode & 0o777
-                );
-            }
-        }
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)
-            .and_then(|f| f.take(MAX_KEY_FILE_BYTES + 1).read_to_end(&mut bytes))
-            .map_err(|_| StartError::new("API key file cannot be read"))?;
-        if bytes.len() as u64 > MAX_KEY_FILE_BYTES {
-            return Err(StartError::new("API key file exceeds 1 MiB"));
-        }
-        let text = String::from_utf8(bytes)
-            .map_err(|_| StartError::new("API key file is not UTF-8 text"))?;
-        Self::parse(&text)
+        Self::parse(&read_private_file(path, "API key file")?)
     }
 
-    pub fn len(&self) -> usize {
-        self.keys.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-    }
-}
-
-impl TokenValidator for StaticKeys {
-    fn validate(&self, token: &str) -> Result<Principal, AuthError> {
+    /// The constant-time check behind [`TokenValidator::validate`]: every key
+    /// is compared on every call.
+    pub fn check(&self, token: &str) -> Result<Principal, AuthError> {
         let presented = sha256(token.as_bytes());
         let mut matched: Option<&str> = None;
         for key in &self.keys {
@@ -249,6 +259,67 @@ impl TokenValidator for StaticKeys {
             })
             .ok_or(AuthError::Invalid)
     }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenValidator for StaticKeys {
+    async fn validate(&self, token: &str) -> Result<Principal, AuthError> {
+        self.check(token)
+    }
+}
+
+/// Read a secret-bearing file; `label` names it in errors, which never quote
+/// its contents. On unix the file must not be accessible to other users
+/// (mode 0600 expected; a world-readable file refuses to start) and group
+/// access prints a warning. At most 1 MiB of UTF-8 text.
+pub(crate) fn read_private_file(path: &FsPath, label: &str) -> Result<String, StartError> {
+    use std::io::Read;
+    let unreadable = || StartError::new(format!("{label} cannot be read"));
+    // Refuse a FIFO or device before opening it (opening a FIFO blocks);
+    // the checks that matter are repeated on the open handle below.
+    if !std::fs::metadata(path).map_err(|_| unreadable())?.is_file() {
+        return Err(StartError::new(format!("{label} is not a regular file")));
+    }
+    // Open first, then check the open handle's metadata, so the mode check
+    // and the read refer to the same file even if the path is swapped.
+    let file = std::fs::File::open(path).map_err(|_| unreadable())?;
+    let metadata = file.metadata().map_err(|_| unreadable())?;
+    if !metadata.is_file() {
+        return Err(StartError::new(format!("{label} is not a regular file")));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode();
+        if mode & 0o007 != 0 {
+            return Err(StartError::new(format!(
+                "{label} is accessible to other users (mode {:o}); run chmod 600 on it",
+                mode & 0o777
+            )));
+        }
+        if mode & 0o070 != 0 {
+            eprintln!(
+                "boxscore-exact serve: warning: {label} is group-accessible (mode {:o}); 0600 is expected",
+                mode & 0o777
+            );
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_KEY_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| unreadable())?;
+    if bytes.len() as u64 > MAX_KEY_FILE_BYTES {
+        return Err(StartError::new(format!("{label} exceeds 1 MiB")));
+    }
+    String::from_utf8(bytes).map_err(|_| StartError::new(format!("{label} is not UTF-8 text")))
 }
 
 fn bearer_token(headers: &HeaderMap) -> Result<&str, AuthError> {
@@ -340,7 +411,8 @@ impl StartError {
 #[derive(Clone)]
 pub struct Config {
     pub database: Option<PathBuf>,
-    /// `None` only for a loopback server started without `--api-key-file`.
+    /// `None` only for a loopback server started without `--api-key-file`
+    /// or OAuth.
     pub validator: Option<Arc<dyn TokenValidator>>,
     /// Serialized origins (`scheme://host[:port]`) allowed to send `Origin`.
     pub allowed_origins: Vec<String>,
@@ -348,6 +420,13 @@ pub struct Config {
     pub public_url: String,
     pub authorization_servers: Vec<String>,
     pub rate_limit_per_minute: u32,
+    /// The OAuth scope a token must carry: advertised in the metadata and
+    /// the OpenAPI document and named in the `insufficient_scope` challenge.
+    /// [`SCOPE`] unless `--oauth-scope` says otherwise.
+    pub scope: String,
+    /// OAuth access-token validation is configured: the OpenAPI document
+    /// then advertises the `oauth2` security scheme.
+    pub oauth_enabled: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -359,11 +438,14 @@ impl std::fmt::Debug for Config {
             .field("public_url", &self.public_url)
             .field("authorization_servers", &self.authorization_servers)
             .field("rate_limit_per_minute", &self.rate_limit_per_minute)
+            .field("scope", &self.scope)
+            .field("oauth_enabled", &self.oauth_enabled)
             .finish()
     }
 }
 
-/// The command-line options of `boxscore-exact serve`.
+/// The command-line options of `boxscore-exact serve`. Holds paths and
+/// identifiers only, never a secret.
 #[derive(Debug, Clone)]
 pub struct ServeOptions {
     pub bind: String,
@@ -371,8 +453,17 @@ pub struct ServeOptions {
     pub api_key_file: Option<PathBuf>,
     pub allow_origins: Vec<String>,
     pub public_url: Option<String>,
+    /// The OAuth issuer. With the `oauth_*` options it also enables OAuth
+    /// access-token validation by introspection.
     pub authorization_servers: Vec<String>,
     pub rate_limit: u32,
+    /// RFC 7662 endpoint; when absent, [`resolve`] discovers it from the
+    /// issuer's RFC 8414 metadata once at start-up.
+    pub introspection_endpoint: Option<String>,
+    pub oauth_client_id: Option<String>,
+    pub oauth_client_secret_file: Option<PathBuf>,
+    pub oauth_audience: Option<String>,
+    pub oauth_scope: Option<String>,
 }
 
 impl Default for ServeOptions {
@@ -385,21 +476,32 @@ impl Default for ServeOptions {
             public_url: None,
             authorization_servers: Vec::new(),
             rate_limit: DEFAULT_RATE_LIMIT,
+            introspection_endpoint: None,
+            oauth_client_id: None,
+            oauth_client_secret_file: None,
+            oauth_audience: None,
+            oauth_scope: None,
         }
     }
 }
 
-fn http_url(raw: &str, what: &str) -> Result<reqwest::Url, StartError> {
-    let url = reqwest::Url::parse(raw)
-        .map_err(|_| StartError::new(format!("{what} is not a URL: {raw}")))?;
+/// Parse an `http`/`https` URL option. Errors name the option, never the
+/// URL itself, which could carry a password.
+pub(crate) fn http_url(raw: &str, what: &str) -> Result<reqwest::Url, StartError> {
+    let url =
+        reqwest::Url::parse(raw).map_err(|_| StartError::new(format!("{what} is not a URL")))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(StartError::new(format!(
-            "{what} must be an http or https URL: {raw}"
+            "{what} must be an http or https URL"
         )));
     }
-    if url.query().is_some() || url.fragment().is_some() || !url.username().is_empty() {
+    if url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
         return Err(StartError::new(format!(
-            "{what} must not carry credentials, a query or a fragment: {raw}"
+            "{what} must not carry credentials (user name or password), a query or a fragment"
         )));
     }
     Ok(url)
@@ -431,7 +533,7 @@ fn public_url_or_default(raw: Option<&str>, port: u16) -> Result<String, StartEr
     }
 }
 
-fn is_loopback_url(raw: &str) -> bool {
+pub(crate) fn is_loopback_url(raw: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(raw) else {
         return false;
     };
@@ -446,9 +548,13 @@ fn is_loopback_url(raw: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// Validate the options and load keys. Refuses a non-loopback bind, or a
-/// non-loopback `--public-url`, without `--api-key-file`, so a server
-/// without authentication is never exposed.
+/// Validate the options, load the API keys and the OAuth client secret.
+/// Refuses a non-loopback bind, or a non-loopback `--public-url`, without a
+/// validator (`--api-key-file` or OAuth), so a server without authentication
+/// is never exposed, and OAuth on a non-loopback bind without
+/// `--public-url`. With OAuth, the introspection endpoint must be known
+/// here: [`resolve`], which `serve` runs, discovers it first when
+/// `--introspection-endpoint` is absent.
 pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartError> {
     let addr: SocketAddr = options.bind.parse().map_err(|_| {
         StartError::new(format!(
@@ -456,18 +562,36 @@ pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartErro
             options.bind
         ))
     })?;
-    if !addr.ip().is_loopback() && options.api_key_file.is_none() {
+    let oauth = oauth::OAuthOptions::from_serve(options)?;
+    let authenticated = options.api_key_file.is_some() || oauth.is_some();
+    if !addr.ip().is_loopback() && !authenticated {
         return Err(StartError::new(format!(
-            "refusing to bind {addr} without authentication; pass --api-key-file or bind a loopback address"
+            "refusing to bind {addr} without authentication; pass --api-key-file, configure OAuth (--authorization-server with --oauth-audience, --oauth-client-id and --oauth-client-secret-file), or bind a loopback address"
+        )));
+    }
+    if oauth.is_some() && !addr.ip().is_loopback() && options.public_url.is_none() {
+        return Err(StartError::new(format!(
+            "OAuth on a non-loopback bind ({addr}) needs --public-url: remote connectors find the authorization server through the URL in the 401 challenge and the protected-resource metadata, which would otherwise name a loopback address"
         )));
     }
     if options.rate_limit == 0 {
         return Err(StartError::new("--rate-limit must be at least 1"));
     }
-    let validator: Option<Arc<dyn TokenValidator>> = match &options.api_key_file {
-        Some(path) => Some(Arc::new(StaticKeys::from_file(path)?)),
-        None => None,
+    // Static keys first: constant time, no network.
+    let mut validators: Vec<Arc<dyn TokenValidator>> = Vec::new();
+    if let Some(path) = &options.api_key_file {
+        validators.push(Arc::new(StaticKeys::from_file(path)?));
+    }
+    if let Some(oauth) = &oauth {
+        validators.push(Arc::new(oauth.validator()?));
+    }
+    let validator: Option<Arc<dyn TokenValidator>> = match validators.len() {
+        0 | 1 => validators.pop(),
+        _ => Some(Arc::new(ValidatorChain(validators))),
     };
+    let scope = oauth
+        .as_ref()
+        .map_or_else(|| SCOPE.to_string(), |o| o.scope.clone());
     let mut allowed_origins = Vec::new();
     for raw in &options.allow_origins {
         let origin = normalize_origin(raw).ok_or_else(|| {
@@ -487,7 +611,7 @@ pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartErro
     // public URL that is not loopback says so.
     if validator.is_none() && !is_loopback_url(&public_url) {
         return Err(StartError::new(format!(
-            "refusing to serve {public_url} without authentication; pass --api-key-file"
+            "refusing to serve {public_url} without authentication; pass --api-key-file or configure OAuth"
         )));
     }
     Ok((
@@ -499,8 +623,33 @@ pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartErro
             public_url,
             authorization_servers,
             rate_limit_per_minute: options.rate_limit,
+            scope,
+            oauth_enabled: oauth.is_some(),
         },
     ))
+}
+
+/// [`prepare`], after discovering the introspection endpoint from the
+/// issuer's `/.well-known/oauth-authorization-server` when OAuth is
+/// configured without `--introspection-endpoint`. Inconsistent flags and an
+/// unreadable client secret are refused before any network call; metadata
+/// without an `introspection_endpoint` refuses to start.
+pub async fn resolve(options: &ServeOptions) -> Result<(SocketAddr, Config), StartError> {
+    prepare(&with_introspection_endpoint(options).await?)
+}
+
+/// `options`, with `introspection_endpoint` discovered when OAuth is
+/// configured without one.
+async fn with_introspection_endpoint(options: &ServeOptions) -> Result<ServeOptions, StartError> {
+    let mut options = options.clone();
+    if let Some(oauth) = oauth::OAuthOptions::from_serve(&options)? {
+        if oauth.introspection_endpoint.is_none() {
+            oauth.client_secret()?;
+            let endpoint = oauth::discover_introspection_endpoint(&oauth.issuer).await?;
+            options.introspection_endpoint = Some(endpoint.to_string());
+        }
+    }
+    Ok(options)
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +662,7 @@ struct AppState {
     limiter: RateLimiter,
     openapi: Value,
     metadata: Value,
+    metadata_mcp: Value,
 }
 
 /// The full application: public routes, authenticated routes, the origin
@@ -521,8 +671,12 @@ pub fn router(config: Config) -> Router {
     let state = Arc::new(AppState {
         mcp: mcp::Server::new(config.database.clone()),
         limiter: RateLimiter::new(config.rate_limit_per_minute),
-        openapi: openapi(&config.public_url),
-        metadata: protected_resource_metadata(&config),
+        openapi: openapi_with_scope(
+            &config.public_url,
+            config.oauth_enabled.then_some(config.scope.as_str()),
+        ),
+        metadata: protected_resource_metadata(&config, &config.public_url),
+        metadata_mcp: protected_resource_metadata(&config, &format!("{}/mcp", config.public_url)),
         config,
     });
     let protected = Router::new()
@@ -536,6 +690,7 @@ pub fn router(config: Config) -> Router {
         .route("/health", get(health))
         .route("/openapi.json", get(openapi_document))
         .route(METADATA_PATH, get(resource_metadata))
+        .route(METADATA_MCP_PATH, get(resource_metadata_mcp))
         .merge(protected)
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
@@ -583,11 +738,21 @@ async fn check_origin(
     next.run(request).await
 }
 
-fn unauthorized(state: &AppState) -> Response {
-    let challenge = format!(
-        "Bearer resource_metadata=\"{}{METADATA_PATH}\"",
-        state.config.public_url
-    );
+/// The metadata document a challenge names: the `/mcp`-suffixed one (whose
+/// `resource` is `<public-url>/mcp`) for the MCP endpoint, so a client asks
+/// the authorization server for the audience it uses there; the unsuffixed
+/// one elsewhere.
+fn metadata_url(state: &AppState, path: &str) -> String {
+    let metadata = if path == "/mcp" || path.starts_with("/mcp/") {
+        METADATA_MCP_PATH
+    } else {
+        METADATA_PATH
+    };
+    format!("{}{metadata}", state.config.public_url)
+}
+
+fn unauthorized(state: &AppState, path: &str) -> Response {
+    let challenge = format!("Bearer resource_metadata=\"{}\"", metadata_url(state, path));
     let mut response = error_body(
         StatusCode::UNAUTHORIZED,
         "UNAUTHORIZED",
@@ -598,6 +763,41 @@ fn unauthorized(state: &AppState) -> Response {
             .headers_mut()
             .insert(header::WWW_AUTHENTICATE, value);
     }
+    response
+}
+
+/// `403` for a valid token without the required scope (RFC 6750 §3.1).
+fn insufficient_scope(state: &AppState, path: &str) -> Response {
+    let challenge = format!(
+        "Bearer error=\"insufficient_scope\", scope=\"{}\", resource_metadata=\"{}\"",
+        state.config.scope,
+        metadata_url(state, path)
+    );
+    let mut response = error_body(
+        StatusCode::FORBIDDEN,
+        "INSUFFICIENT_SCOPE",
+        "The access token does not carry the required scope",
+    );
+    if let Ok(value) = HeaderValue::from_str(&challenge) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
+    }
+    response
+}
+
+/// `503` when the token could not be checked: not the client's fault, so
+/// not a `401` that would send it back through sign-in.
+fn auth_unavailable() -> Response {
+    let mut response = error_body(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "AUTH_UNAVAILABLE",
+        "The authorization server could not check the token; retry later",
+    );
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from(AUTH_UNAVAILABLE_RETRY_SECONDS),
+    );
     response
 }
 
@@ -614,13 +814,23 @@ async fn authenticate(
             method: "none",
         },
         Some(validator) => {
-            match bearer_token(request.headers()).and_then(|t| validator.validate(t)) {
+            let outcome = match bearer_token(request.headers()) {
+                Ok(token) => validator.validate(token).await,
+                Err(error) => Err(error),
+            };
+            match outcome {
                 Ok(principal) => principal,
-                Err(_) => return unauthorized(&state),
+                Err(AuthError::InsufficientScope) => {
+                    return insufficient_scope(&state, request.uri().path())
+                }
+                Err(AuthError::Unavailable) => return auth_unavailable(),
+                Err(AuthError::Missing | AuthError::Invalid) => {
+                    return unauthorized(&state, request.uri().path())
+                }
             }
         }
     };
-    if let Err(wait) = state.limiter.check(&principal.subject) {
+    if let Err(wait) = state.limiter.check(&principal.caller()) {
         let mut response = error_body(
             StatusCode::TOO_MANY_REQUESTS,
             "RATE_LIMITED",
@@ -652,12 +862,18 @@ async fn resource_metadata(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(state.metadata.clone())
 }
 
-fn protected_resource_metadata(config: &Config) -> Value {
+async fn resource_metadata_mcp(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(state.metadata_mcp.clone())
+}
+
+/// RFC 9728 metadata naming `resource`. Dynamic client registration is the
+/// authorization server's business; nothing here advertises it.
+fn protected_resource_metadata(config: &Config, resource: &str) -> Value {
     json!({
-        "resource": config.public_url,
+        "resource": resource,
         "authorization_servers": config.authorization_servers,
         "bearer_methods_supported": ["header"],
-        "scopes_supported": [SCOPE],
+        "scopes_supported": [config.scope],
     })
 }
 
@@ -751,7 +967,7 @@ async fn mcp_post(
         return rpc_error(StatusCode::BAD_REQUEST, PARSE_ERROR, "Parse error");
     };
     // Tool calls are traced with the authenticated principal as the caller.
-    let server = state.mcp.with_caller(format!("http:{}", principal.subject));
+    let server = state.mcp.with_caller(principal.caller());
     match server.handle(message).await {
         // A notification or a client response: accepted, nothing to say.
         None => StatusCode::ACCEPTED.into_response(),
@@ -836,7 +1052,7 @@ async fn calc(
         input,
         // The server's configured database, never anything from the body.
         database: state.config.database.clone(),
-        caller: format!("http:{}", principal.subject),
+        caller: principal.caller(),
     };
     let envelope = if empty {
         catalog::invoke(&call).await
@@ -926,26 +1142,51 @@ fn error_response(description: &str) -> Value {
     json_response(description, json!({"$ref": "#/components/schemas/Error"}))
 }
 
-fn auth_responses() -> Value {
+/// The authentication responses; `metadata_path` is the document the
+/// challenges name on this path ([`METADATA_MCP_PATH`] on `/mcp`).
+fn auth_responses(metadata_path: &str) -> Value {
     json!({
         "401": {
             "description": "Missing or invalid bearer token",
             "headers": {"WWW-Authenticate": {"schema": {"type": "string"},
-                "description": "Bearer resource_metadata=\"<public-url>/.well-known/oauth-protected-resource\""}},
+                "description": format!("Bearer resource_metadata=\"<public-url>{metadata_path}\"")}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
         },
-        "403": error_response("Origin header not on the allowlist"),
+        "403": {
+            "description": "Origin header not on the allowlist (ORIGIN_NOT_ALLOWED), or an OAuth access token without the required scope (INSUFFICIENT_SCOPE)",
+            "headers": {"WWW-Authenticate": {"schema": {"type": "string"},
+                "description": format!("With INSUFFICIENT_SCOPE only: Bearer error=\"insufficient_scope\", scope=\"<scope>\", resource_metadata=\"<public-url>{metadata_path}\"")}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+        },
         "413": error_response("Body exceeds 2 MiB"),
         "429": {
             "description": "Rate limit for this key exceeded",
+            "headers": {"Retry-After": {"schema": {"type": "integer"}}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+        },
+        "503": {
+            "description": "OAuth only: the authorization server could not check the token (AUTH_UNAVAILABLE)",
             "headers": {"Retry-After": {"schema": {"type": "integer"}}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
         }
     })
 }
 
+fn metadata_document_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["resource", "authorization_servers", "bearer_methods_supported", "scopes_supported"],
+        "properties": {
+            "resource": {"type": "string"},
+            "authorization_servers": {"type": "array", "items": {"type": "string"}},
+            "bearer_methods_supported": {"type": "array", "items": {"const": "header"}},
+            "scopes_supported": {"type": "array", "items": {"type": "string"}}
+        }
+    })
+}
+
 fn calc_path(calc: &catalog::Calculation) -> Value {
-    let mut responses = auth_responses();
+    let mut responses = auth_responses(METADATA_PATH);
     responses["200"] = json_response(
         "Calculated (status calculated or review_required)",
         success_schema(calc),
@@ -987,13 +1228,22 @@ fn calc_path(calc: &catalog::Calculation) -> Value {
 }
 
 /// The OpenAPI 3.1 document for this server, generated from the catalog:
-/// the written contract for the HTTP API.
+/// the written contract for the HTTP API, for a server with API keys only
+/// (no `oauth2` security scheme).
 pub fn openapi(public_url: &str) -> Value {
+    openapi_with_scope(public_url, None)
+}
+
+/// [`openapi`] for a server with OAuth configured and requiring `scope`
+/// (`--oauth-scope`): it also advertises the `oauth2` security scheme and
+/// the `{"oauth2": [scope]}` requirement. `None` is the API-key-only
+/// document. Only `servers` and the OAuth scheme depend on configuration.
+pub fn openapi_with_scope(public_url: &str, scope: Option<&str>) -> Value {
     let mut paths = serde_json::Map::new();
     for calc in catalog::CATALOG {
         paths.insert(format!("/v1/calc/{}", calc.name), calc_path(calc));
     }
-    let mut mcp_responses = auth_responses();
+    let mut mcp_responses = auth_responses(METADATA_MCP_PATH);
     mcp_responses["200"] = json_response(
         "The JSON-RPC response to a request",
         json!({"type": "object", "required": ["jsonrpc", "id"]}),
@@ -1069,18 +1319,48 @@ pub fn openapi(public_url: &str) -> Value {
             "operationId": "oauth_protected_resource",
             "summary": "OAuth 2.0 Protected Resource Metadata (RFC 9728)",
             "tags": ["service"], "security": [],
-            "responses": {"200": json_response("Metadata", json!({
-                "type": "object",
-                "required": ["resource", "authorization_servers", "bearer_methods_supported", "scopes_supported"],
-                "properties": {
-                    "resource": {"type": "string"},
-                    "authorization_servers": {"type": "array", "items": {"type": "string"}},
-                    "bearer_methods_supported": {"type": "array", "items": {"const": "header"}},
-                    "scopes_supported": {"type": "array", "items": {"type": "string"}}
-                }
-            }))}
+            "responses": {"200": json_response("Metadata; resource is the public URL", metadata_document_schema())}
         }}),
     );
+    paths.insert(
+        METADATA_MCP_PATH.into(),
+        json!({"get": {
+            "operationId": "oauth_protected_resource_mcp",
+            "summary": "RFC 9728 metadata for the resource <public-url>/mcp (path-suffixed variant)",
+            "tags": ["service"], "security": [],
+            "responses": {"200": json_response("Metadata; resource is <public-url>/mcp", metadata_document_schema())}
+        }}),
+    );
+    let mut security = vec![json!({"bearer": []})];
+    let mut security_schemes = serde_json::Map::new();
+    if let Some(scope) = scope {
+        security.push(json!({"oauth2": [scope]}));
+        security_schemes.insert(
+            "bearer".into(),
+            json!({
+                "type": "http", "scheme": "bearer",
+                "description": "An API key from --api-key-file (scripts). An OAuth 2.1 access token is sent the same way; see oauth2."
+            }),
+        );
+        security_schemes.insert(
+            "oauth2".into(),
+            json!({
+                "type": "oauth2",
+                "description": format!(
+                    "An OAuth 2.1 access token issued by the authorization server listed in {METADATA_PATH} (RFC 9728), carrying scope {scope} and this server's audience, checked by RFC 7662 introspection. The authorization and token endpoints are that server's own (its RFC 8414 metadata), not this server's, so no flow URL is listed here; clients such as claude.ai and ChatGPT discover them from the 401 WWW-Authenticate challenge."
+                ),
+                "flows": {}
+            }),
+        );
+    } else {
+        security_schemes.insert(
+            "bearer".into(),
+            json!({
+                "type": "http", "scheme": "bearer",
+                "description": "An API key from --api-key-file (scripts)."
+            }),
+        );
+    }
     json!({
         "openapi": "3.1.0",
         "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
@@ -1096,7 +1376,7 @@ pub fn openapi(public_url: &str) -> Value {
             "license": {"name": "Apache-2.0", "identifier": "Apache-2.0"}
         },
         "servers": [{"url": public_url}],
-        "security": [{"bearer": []}],
+        "security": security,
         "tags": [
             {"name": "calculations", "description": "One operation per catalog function"},
             {"name": "mcp", "description": "Model Context Protocol, Streamable HTTP"},
@@ -1104,12 +1384,7 @@ pub fn openapi(public_url: &str) -> Value {
         ],
         "paths": paths,
         "components": {
-            "securitySchemes": {
-                "bearer": {
-                    "type": "http", "scheme": "bearer",
-                    "description": "An API key from --api-key-file (scripts), or an OAuth 2.1 access token from the advertised authorization server once configured"
-                }
-            },
+            "securitySchemes": security_schemes,
             "schemas": {
                 "Envelope": envelope_schema(),
                 "Refusal": {
@@ -1160,7 +1435,9 @@ pub async fn serve(
     options: ServeOptions,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), StartError> {
+    let options = with_introspection_endpoint(&options).await?;
     let (addr, mut config) = prepare(&options)?;
+    let oauth = oauth::OAuthOptions::from_serve(&options)?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| StartError::new(format!("cannot bind {addr}: {e}")))?;
@@ -1170,14 +1447,22 @@ pub async fn serve(
     if options.public_url.is_none() {
         config.public_url = public_url_or_default(None, local.port())?;
     }
-    let auth = match &options.api_key_file {
-        Some(_) => "bearer API keys",
-        None => "none (loopback only)",
+    let auth = match (options.api_key_file.is_some(), oauth.is_some()) {
+        (true, true) => "bearer API keys, then OAuth introspection",
+        (true, false) => "bearer API keys",
+        (false, true) => "OAuth introspection",
+        (false, false) => "none (loopback only)",
     };
     eprintln!("boxscore-exact serve: listening on http://{local} (auth: {auth})");
-    if !config.authorization_servers.is_empty() && options.api_key_file.is_none() {
+    if let Some(oauth) = &oauth {
+        // Identifiers only; the client secret is never printed.
+        let endpoint = oauth
+            .introspection_endpoint
+            .as_ref()
+            .map_or("", reqwest::Url::as_str);
         eprintln!(
-            "boxscore-exact serve: note: --authorization-server is advertised in metadata only; OAuth token validation is not yet implemented"
+            "boxscore-exact serve: OAuth issuer {}, introspection {endpoint}, audience {}, scope {}",
+            oauth.issuer, oauth.audience, oauth.scope
         );
     }
     let app = router(config);
@@ -1207,9 +1492,9 @@ mod tests {
         let keys =
             StaticKeys::parse(&format!("# comment\n\nci:{secret}\r\nops : {secret}x \n")).unwrap();
         assert_eq!(keys.len(), 2);
-        assert_eq!(keys.validate(&secret).unwrap().subject, "ci");
-        assert_eq!(keys.validate(&format!("{secret}x")).unwrap().subject, "ops");
-        assert_eq!(keys.validate("nope"), Err(AuthError::Invalid));
+        assert_eq!(keys.check(&secret).unwrap().subject, "ci");
+        assert_eq!(keys.check(&format!("{secret}x")).unwrap().subject, "ops");
+        assert_eq!(keys.check("nope"), Err(AuthError::Invalid));
         assert!(StaticKeys::parse("").is_err());
         assert!(StaticKeys::parse("ci:short").is_err());
         assert!(StaticKeys::parse(&format!("no-colon{secret}")).is_err());

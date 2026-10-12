@@ -395,10 +395,10 @@ not access control. The limits, and the `BOXSCORE_TRACE_INPUTS` and
 - [docs/DATA_FLOW.md](docs/DATA_FLOW.md): what goes in, what is stored, what
   leaves, for an IT review.
 - [docs/connectors/remote-mcp.md](docs/connectors/remote-mcp.md): serve the
-  catalog over HTTP with API keys (scripts and Claude Code today). Remote
-  claude.ai and ChatGPT connectors need OAuth (the standard web sign-in
-  protocol), which is not built yet;
-  that page says exactly where it stands.
+  catalog over HTTP with API keys (scripts and Claude Code) or OAuth (the
+  standard web sign-in protocol, for remote claude.ai and ChatGPT
+  connectors, through your own identity provider; not yet tried against a
+  real one); that page says exactly where it stands.
 - [docs/EXACT_CENTS.md](docs/EXACT_CENTS.md): the full contract: the 12
   functions, the envelope, versioning.
 - [docs/GLOSSARY.md](docs/GLOSSARY.md): every term used here.
