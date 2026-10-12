@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "plat-operations"
-version = "0.1.1"
+version = "0.2.0"
 description = "Checked-cent multifamily operating calculations and immutable local reports"
 readme = "PYTHON_PACKAGE.md"
 requires-python = ">=3.11"

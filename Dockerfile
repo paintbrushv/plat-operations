@@ -4,7 +4,7 @@
 # docs/DATA_FLOW.md (what goes in, what is stored, what leaves).
 #
 # Build from the repository root:
-#   docker build --build-arg VERSION=0.1.1 --build-arg REVISION="$(git rev-parse HEAD)" \
+#   docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" \
 #     -t boxscore-exact:local .
 #
 # Base images are pinned by tag and by the multi-arch index digest resolved

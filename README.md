@@ -1,6 +1,6 @@
 # plat-operations (BOXSCORE)
 
-**v0.1 candidate:** use the [exact-cent workflow](docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
+**v0.2.0:** use the [exact-cent workflow](docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
 
 A deterministic, checked-cent calculation core for multifamily operating numbers
 (net operating income (NOI) variance, occupancy, delinquency, trailing twelve
@@ -20,7 +20,7 @@ and nothing else needs a network. Three commands load a synthetic sample
 month for "Sample Gardens" (24 units, 2026-05):
 
 ```bash
-IMAGE=ghcr.io/paintbrushv/plat-operations:0.1.1
+IMAGE=ghcr.io/paintbrushv/plat-operations:0.2.0
 SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges"
 docker run --rm $SAFE "$IMAGE"                                    # 1. prints the calculation catalog
 docker run --rm $SAFE -v boxscore-data:/data "$IMAGE" init --database /data/exact.sqlite   # 2. create the database
@@ -29,14 +29,19 @@ docker run --rm $SAFE -v boxscore-data:/data -v "$PWD/docs/quickstart:/in:ro" "$
   --snapshot /in/snapshot.json --property "Sample Gardens" --period 2026-05 --units 24   # 3. import it
 ```
 
-> **No published image yet.** Until the first tagged release is published to
-> GHCR (the publish job runs only on a `v*` tag), build the image locally from
-> the repository root and use it (`IMAGE=boxscore-exact:local`) instead. The
-> build command is the one in the Dockerfile header, and the image CI check
-> (`scripts/check_image.py`) builds and checks the image the same way:
+> **Published image.** Release 0.2.0 is the first version pushed to GHCR, as
+> `ghcr.io/paintbrushv/plat-operations:0.2.0` (`linux/amd64`; the same digest is
+> also tagged `sha-<first 7 hex of the commit>`, and there is no `latest` tag).
+> The release workflow signs each image with cosign keyless signing and attaches
+> its SBOM as a signed attestation. Verify both before first use with the
+> commands in [Verify the image](docs/INSTALL.md#verify-the-image).
+>
+> To build the image yourself instead, run this from the repository root
+> (the command is the one in the Dockerfile header, and `scripts/check_image.py`
+> builds and checks the image the same way) and set `IMAGE=boxscore-exact:local`:
 >
 > ```bash
-> docker build --build-arg VERSION=0.1.1 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
 > IMAGE=boxscore-exact:local
 > ```
 
