@@ -267,8 +267,10 @@ docker run -d --rm --name boxscore-serve \
   audience and scope, and one line per failed introspection call. Tokens and
   the client secret are never logged.
 
-This recipe has not been run against a real IdP; the server side is covered
-by `boxscore/tests/exact_mcp_http_oauth.rs` with a mock IdP.
+This container recipe has not been run against a real IdP. The native
+binary was run against Keycloak 26.0 on one machine (the
+[Keycloak recipe](connectors/remote-mcp.md#local-test-with-keycloak-verified-against-keycloak-260-on-2026-10-12)), and the server
+side is covered by `boxscore/tests/exact_mcp_http_oauth.rs` with a mock IdP.
 
 ## Volume layout
 

@@ -211,13 +211,16 @@ another `TokenValidator` behind the same seam in
 | IdP | RFC 7662 introspection | dynamic client registration (DCR) |
 |---|---|---|
 | Okta (custom authorization server) | Yes: `https://<org>.okta.com/oauth2/<server-id>/v1/introspect` [stated] | Okta's client registration endpoint (`/oauth2/v1/clients`) needs an admin API token, so it is not the open registration that claude.ai or ChatGPT can use on their own. Register the connector's client by hand and paste its id and secret. [stated: Okta developer forum] |
-| Keycloak | Yes: `https://<host>/realms/<realm>/protocol/openid-connect/token/introspect` [stated] | Yes, at `/realms/<realm>/clients-registrations/openid-connect`. Anonymous registration is blocked unless the realm's client registration policies (Trusted Hosts) allow the vendor's hosts. [stated: keycloak.org "Using the client registration service"] |
+| Keycloak | Yes: `https://<host>/realms/<realm>/protocol/openid-connect/token/introspect`. **Verified with Keycloak 26.0.8** ([recipe](#local-test-with-keycloak-verified-against-keycloak-260-on-2026-10-12)): metadata discovery works through the appended form `/realms/<realm>/.well-known/oauth-authorization-server` (the RFC 8414 form answers `404`); introspection returns `token_type` and `typ` `Bearer` for access tokens and `Refresh` or `ID` for the other tokens, which it also reports active; the *Audience* mapper on the scope puts the audience in `aud` as described; the RFC 8707 `resource` parameter is ignored. | Yes, at `/realms/<realm>/clients-registrations/openid-connect` (listed as `registration_endpoint` in the metadata, verified). Anonymous registration is blocked unless the realm's client registration policies (Trusted Hosts) allow the vendor's hosts. [stated: keycloak.org "Using the client registration service"; not tested] |
 | Auth0 | **No.** Auth0 documents no RFC 7662 endpoint; it expects resource servers to validate JWT access tokens against its JWKS. Not usable with this release. [stated: Auth0 community thread "RFC 7662 support", 2021; no later Auth0 document found that adds it] | Yes, "OIDC Dynamic Application Registration" (open, no token) at `/oidc/register`, off by default (Dashboard → Settings → Advanced). [stated: auth0.com/docs, Dynamic Application Registration] |
 | Microsoft Entra ID | **No** introspection endpoint; needs JWT validation. Not usable with this release. [stated] | No open DCR. [stated] |
 
-The IdP column claims come from the vendors' public documentation and
-forums as of October 2026. None of these IdPs was tested against this
-server; only the mock below and the automated tests were run.
+The claims marked [stated] come from the vendors' public documentation and
+forums as of October 2026. Keycloak 26.0 is the only IdP tested against
+this server, locally and with the password grant (see the
+[recipe](#local-test-with-keycloak-verified-against-keycloak-260-on-2026-10-12));
+Okta, Auth0 and Entra ID were not tested, and no connector sign-in
+(authorization code flow, DCR) was tried with any IdP.
 
 Dynamic client registration is entirely the IdP's job. This server neither
 offers nor proxies a registration endpoint, and its metadata does not
@@ -248,7 +251,10 @@ secret into the connector settings.
    the access token and to token introspection) to the `boxscore:calc`
    client scope. Using the MCP URL (`https://boxscore.example.com/mcp`) also
    matches IdPs that turn the RFC 8707 `resource` parameter, which MCP
-   clients send, into the audience.
+   clients send, into the audience; Keycloak 26.0 does not (verified), so
+   with Keycloak the mapper is the only source of `aud`. With the mapper on
+   the scope, a token without the scope has no audience either, and the
+   server answers `401`, not `403` (verified).
 4. **Introspection credentials.** A separate confidential client for this
    server (no user sign-in, no redirect URI) whose id and secret go into
    `--oauth-client-id` and the file named by `--oauth-client-secret-file`.
@@ -263,8 +269,10 @@ secret into the connector settings.
 
 ### claude.ai custom connector (unverified)
 
-Not tried against a real IdP or a real claude.ai account; this is the
-expected flow from Anthropic's and third-party connector documentation.
+Not tried with a real claude.ai account; this is the expected flow from
+Anthropic's and third-party connector documentation. The server side was
+checked against Keycloak 26.0 on one machine ([below](#local-test-with-keycloak-verified-against-keycloak-260-on-2026-10-12)), but no
+connector sign-in (authorization code flow, DCR, a public endpoint) was.
 
 1. Run the server behind TLS on a public host name with the OAuth flags
    above and `--public-url https://boxscore.example.com`. Check from outside:
@@ -277,18 +285,27 @@ expected flow from Anthropic's and third-party connector documentation.
 3. Under *Advanced settings*, paste the connector client's *OAuth Client ID*
    and *OAuth Client Secret* if your IdP has no open DCR (Okta). Leave them
    empty when it does (Keycloak with a Trusted Hosts policy for claude.ai,
-   Auth0 once JWT validation exists).
+   Auth0 once JWT validation exists). A client that registers itself
+   through Keycloak's DCR gets the realm's default client scopes, so make
+   `boxscore:calc` a realm default or optional client scope that the
+   registration policy allows [stated; not tested].
 4. Click *Connect*. The user is sent to your IdP's sign-in page, signs in,
    and sees a consent screen for scope `boxscore:calc` (whether consent is
    shown is the IdP's setting). The browser returns to claude.ai, and the
    connector lists the catalog tools.
-5. A call that fails with `403 insufficient_scope` means the token lacks the
-   scope: fix step 2 of the checklist and reconnect. Repeated sign-in
-   prompts mean `401`: usually the audience (checklist step 3).
+5. A call that fails with `403 insufficient_scope` means the token has the
+   audience but lacks the scope: fix step 2 of the checklist and reconnect.
+   Repeated sign-in prompts mean `401`: usually the audience (checklist
+   step 3), but with Keycloak, where the audience comes from the scope's
+   mapper, a missing scope also shows up as `401` (verified locally). With
+   Keycloak also check that the IdP's host name is fixed (`KC_HOSTNAME`):
+   Keycloak takes the issuer from the request's host name and reports a
+   token issued under another host name as inactive (verified locally).
 
 ### ChatGPT Developer Mode connector (unverified)
 
-Not tried against a real IdP or a real ChatGPT account.
+Not tried with a real ChatGPT account, and no connector sign-in was tried
+with any IdP; only the server side was checked against Keycloak locally.
 
 1. As for claude.ai, step 1.
 2. In ChatGPT: Settings → Apps & Connectors → Advanced settings → turn on
@@ -381,55 +398,208 @@ answer is `503` with `Retry-After: 5`, and stderr shows
 `local-good-token` keeps working from the cache until its verdict expires.
 (Run on Linux with Python 3.12 when this page was written.)
 
-### Local test with Keycloak in a container (unverified)
+### Local test with Keycloak (verified against Keycloak 26.0 on 2026-10-12)
 
-Written from the Keycloak documentation; **not run** when this page was
-written (no container runtime was available). Expect to adjust it to your
-Keycloak version.
+Run on 2026-10-12 on Linux against Keycloak 26.0.8, the last 26.0 release (the one the `26.0` image tag tracks),
+with every command below and the outputs shown. One deviation: the Docker
+socket was not usable on the test host, so Keycloak ran from the official
+`keycloak-26.0.8.tar.gz` release on Java 21 (the second form in step 1)
+instead of in the container. The `docker run` line is the container
+equivalent of the same server and was not run. Everything here is
+synthetic: the realm, the user `alice`, and the secrets in
+[keycloak-realm.example.json](keycloak-realm.example.json), which are fake
+and must never be used on a reachable Keycloak.
+
+The realm file defines:
+
+- client scope `boxscore:calc`, with an *Audience* mapper that adds
+  `http://127.0.0.1:3819/mcp` to the access token's `aud` and to the
+  introspection answer;
+- client scope `basic` with the `sub` mapper. A realm import that lists
+  `clientScopes` replaces Keycloak's built-in scopes (`basic`, `profile`,
+  `email`, `roles`, ...), and without `basic` the tokens have no `sub`;
+- `boxscore-server`: confidential, every flow off; this server's
+  introspection credentials;
+- `boxscore-test`: confidential, direct access grants (password grant) on,
+  default scopes `basic` and `boxscore:calc`. It stands in for the
+  connector, which would use the authorization code flow;
+- `boxscore-noscope`: like `boxscore-test` but without `boxscore:calc`. It
+  carries its own audience mapper, so its tokens have the right `aud` and
+  only the scope is missing (the `403` case);
+- user `alice`, password `fake-alice-password`.
+
+Run from the repository root, with `boxscore-exact` on the `PATH` (see
+[QUICKSTART.md](../../QUICKSTART.md), Path B), `curl` and `jq`.
+
+**1. Start Keycloak** on loopback with the realm imported:
 
 ```bash
 docker run -d --name kc -p 127.0.0.1:8080:8080 \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:26.0 start-dev
-KC="docker exec kc /opt/keycloak/bin/kcadm.sh"
-$KC config credentials --server http://localhost:8080 --realm master --user admin --password admin
-$KC create realms -s realm=boxscore -s enabled=true
-# The scope, with an audience mapper so tokens carry aud=http://127.0.0.1:3819/mcp.
-$KC create client-scopes -r boxscore -s name=boxscore:calc -s protocol=openid-connect \
-  -s 'attributes."include.in.token.scope"=true'
-SCOPE_ID=$($KC get client-scopes -r boxscore --fields id,name --format csv --noquotes \
-  | awk -F, '$2=="boxscore:calc"{print $1}')
-$KC create "client-scopes/$SCOPE_ID/protocol-mappers/models" -r boxscore \
-  -s name=boxscore-audience -s protocol=openid-connect -s protocolMapper=oidc-audience-mapper \
-  -s 'config."included.custom.audience"=http://127.0.0.1:3819/mcp' \
-  -s 'config."access.token.claim"=true' -s 'config."introspection.token.claim"=true'
-# The resource server's introspection client.
-RS_SECRET=$(openssl rand -hex 24)
-$KC create clients -r boxscore -s clientId=boxscore-rs -s publicClient=false \
-  -s standardFlowEnabled=false -s directAccessGrantsEnabled=false -s secret="$RS_SECRET"
-(umask 077; printf '%s\n' "$RS_SECRET" > client-secret)
-# A test client that gets tokens with client credentials (a stand-in for the
-# connector, which would use the authorization code flow).
-TEST_SECRET=$(openssl rand -hex 24)
-$KC create clients -r boxscore -s clientId=test-client -s publicClient=false \
-  -s serviceAccountsEnabled=true -s standardFlowEnabled=false -s secret="$TEST_SECRET" \
-  -s 'optionalClientScopes=["boxscore:calc"]'
+  -v "$PWD/docs/connectors/keycloak-realm.example.json:/opt/keycloak/data/import/boxscore-realm.json:ro" \
+  quay.io/keycloak/keycloak:26.0 start-dev --import-realm
 
-boxscore-exact serve --bind 127.0.0.1:3819 \
-  --authorization-server http://localhost:8080/realms/boxscore \
-  --introspection-endpoint http://localhost:8080/realms/boxscore/protocol/openid-connect/token/introspect \
-  --oauth-client-id boxscore-rs --oauth-client-secret-file ./client-secret \
-  --oauth-audience http://127.0.0.1:3819/mcp &
+# or, as run for this page, the release tarball (needs Java 17 or later):
+#   tar -xzf keycloak-26.0.8.tar.gz
+#   mkdir -p keycloak-26.0.8/data/import
+#   cp docs/connectors/keycloak-realm.example.json keycloak-26.0.8/data/import/
+#   KC_BOOTSTRAP_ADMIN_USERNAME=admin KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+#     keycloak-26.0.8/bin/kc.sh start-dev --import-realm --http-host=127.0.0.1 --http-port=8080 &
 
-TOKEN=$(curl -s -d grant_type=client_credentials -d scope=boxscore:calc \
-  -u "test-client:$TEST_SECRET" \
-  http://localhost:8080/realms/boxscore/protocol/openid-connect/token | jq -r .access_token)
-curl -s -X POST http://127.0.0.1:3819/v1/calc/describe -H "Authorization: Bearer $TOKEN"
+until curl -sf http://127.0.0.1:8080/realms/boxscore/.well-known/oauth-authorization-server >/dev/null; do sleep 2; done
 ```
 
-Expected: the call returns a `describe` envelope, and its trace names the
-caller `http:oauth:<service-account user id>`. Without
-`-d scope=boxscore:calc` the call gets `403 insufficient_scope`.
+Use `127.0.0.1` everywhere, never `localhost`. Keycloak derives the issuer
+from the host name of each request, and a token minted at
+`http://localhost:8080` was answered `"active": false` when introspected at
+`http://127.0.0.1:8080`, so the server refused it with `401`. A real
+deployment fixes the host name with `KC_HOSTNAME`.
+
+**2. Start the server** on a fresh database with the quickstart sample month:
+
+```bash
+boxscore-exact init --database ./kc-test.sqlite
+boxscore-exact import-csv --database ./kc-test.sqlite \
+  --actuals docs/quickstart/actuals.csv --budgets docs/quickstart/budgets.csv \
+  --snapshot docs/quickstart/snapshot.json \
+  --property "Sample Gardens" --period 2026-05 --units 24
+(umask 077; printf 'fake-server-secret-change-me\n' > ./kc-client-secret)
+boxscore-exact serve --bind 127.0.0.1:3819 --database ./kc-test.sqlite \
+  --authorization-server http://127.0.0.1:8080/realms/boxscore \
+  --oauth-audience http://127.0.0.1:3819/mcp \
+  --oauth-client-id boxscore-server --oauth-client-secret-file ./kc-client-secret &
+until curl -sf http://127.0.0.1:3819/health >/dev/null; do sleep 1; done
+# boxscore-exact serve: listening on http://127.0.0.1:3819 (auth: OAuth introspection)
+# boxscore-exact serve: OAuth issuer http://127.0.0.1:8080/realms/boxscore, introspection http://127.0.0.1:8080/realms/boxscore/protocol/openid-connect/token/introspect, audience http://127.0.0.1:3819/mcp, scope boxscore:calc
+```
+
+No `--introspection-endpoint` is needed. Keycloak answers `404` at the
+RFC 8414 form (`/.well-known/oauth-authorization-server/realms/boxscore`)
+and serves the metadata at the appended form
+(`/realms/boxscore/.well-known/oauth-authorization-server`); the server
+falls back to it, the `issuer` matches, and the banner shows the discovered
+endpoint.
+
+**3. Get tokens** for `alice` with the password grant:
+
+```bash
+KC=http://127.0.0.1:8080/realms/boxscore/protocol/openid-connect
+token() {  # $1 = client:secret, $2 = scope; prints the access token
+  curl -s -u "$1" -d grant_type=password -d username=alice \
+    -d password=fake-alice-password -d "scope=$2" "$KC/token" | jq -r .access_token
+}
+TOKEN=$(token boxscore-test:fake-test-secret-change-me 'openid boxscore:calc')
+NOSCOPE=$(token boxscore-noscope:fake-noscope-secret-change-me openid)
+```
+
+The token response says `"token_type":"Bearer"`, `"expires_in":300` and
+`"scope":"openid boxscore:calc"` (`"scope":"openid"` for `boxscore-noscope`).
+Asking `boxscore-noscope` for `boxscore:calc` is refused by Keycloak with
+`invalid_scope`, not silently dropped.
+
+**4. Check.** Each command is followed by what it returned:
+
+```bash
+curl -s http://127.0.0.1:3819/.well-known/oauth-protected-resource/mcp
+# {"authorization_servers":["http://127.0.0.1:8080/realms/boxscore"],"bearer_methods_supported":["header"],"resource":"http://127.0.0.1:3819/mcp","scopes_supported":["boxscore:calc"]}
+
+INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+curl -s -o /dev/null -D - -X POST http://127.0.0.1:3819/mcp \
+  -H 'Content-Type: application/json' -d "$INIT"            # no token
+# HTTP/1.1 401 Unauthorized   (other headers left out here and below)
+# www-authenticate: Bearer resource_metadata="http://127.0.0.1:3819/.well-known/oauth-protected-resource/mcp"
+
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:3819/mcp \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$INIT"
+# 200   (the body is the initialize result: serverInfo boxscore-exact, protocolVersion 2025-06-18)
+
+ARGS='{"currency":"USD","expense_convention":"positive_costs",
+  "actuals":[{"account_code":"4000","account_name":"rent","category":"rental income","amount":"100.10"},
+             {"account_code":"5000","account_name":"payroll","category":"payroll","amount":"30.00"}],
+  "budgets":[{"account_code":"4000","account_name":"rent","category":"rental income","amount":"90.05"},
+             {"account_code":"5000","account_name":"payroll","category":"payroll","amount":"25.00"}]}'
+CALL=$(curl -s -X POST http://127.0.0.1:3819/mcp \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"noi_variance\",\"arguments\":$ARGS}}")
+echo "$CALL" | jq -c '.result | {isError, status: .structuredContent.status, trace_id: .structuredContent.trace_id,
+                                 noi_variance: .structuredContent.result.noi_bridge.noi_variance}'
+# {"isError":false,"status":"calculated","trace_id":"43273dce-ffa9-4708-ab9d-586226e7ac67","noi_variance":"5.05"}
+
+curl -s -o /dev/null -D - -X POST http://127.0.0.1:3819/mcp \
+  -H "Authorization: Bearer $NOSCOPE" -H 'Content-Type: application/json' -d "$INIT"
+# HTTP/1.1 403 Forbidden
+# www-authenticate: Bearer error="insufficient_scope", scope="boxscore:calc", resource_metadata="http://127.0.0.1:3819/.well-known/oauth-protected-resource/mcp"
+
+curl -s -X POST http://127.0.0.1:3819/v1/calc/noi_variance \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$ARGS" \
+  | jq -c '{status, trace_id, noi_variance: .result.noi_bridge.noi_variance}'
+# {"status":"calculated","trace_id":"ad2c5255-76f4-4336-8668-81285af8bc17","noi_variance":"5.05"}
+
+TRACE_ID=$(echo "$CALL" | jq -r .result.structuredContent.trace_id)
+boxscore-exact trace --database ./kc-test.sqlite --id "$TRACE_ID" | jq -r .result.trace.caller
+# http:oauth:d3c6397a-07b8-4242-9664-5e45b750b46b   (alice's Keycloak user id; yours differs)
+```
+
+The `/v1/calc` call with `$NOSCOPE` gets the same `403`, naming the
+unsuffixed metadata document. `review_period` on the imported revision
+returned `200` with `noi_variance` `-5100.00`, as in the quickstart. Your
+trace ids differ.
+
+**What Keycloak's introspection returns.** The server's own view, with
+`boxscore-server`'s credentials (`jti` and `sid` left out; keys sorted here, Keycloak's order differs):
+
+```bash
+curl -s -u boxscore-server:fake-server-secret-change-me -d "token=$TOKEN" \
+  "$KC/token/introspect" | jq 'del(.jti, .sid)'
+```
+
+```json
+{
+  "active": true,
+  "aud": "http://127.0.0.1:3819/mcp",
+  "azp": "boxscore-test",
+  "client_id": "boxscore-test",
+  "exp": 1791806008,
+  "iat": 1791805708,
+  "iss": "http://127.0.0.1:8080/realms/boxscore",
+  "scope": "openid boxscore:calc",
+  "sub": "d3c6397a-07b8-4242-9664-5e45b750b46b",
+  "token_type": "Bearer",
+  "typ": "Bearer",
+  "username": "alice"
+}
+```
+
+- `aud` is a single string when the audience mapper adds the only audience;
+  it becomes an array once another audience is added (for example by the
+  built-in `roles` scope, which adds `account`). The server accepts both.
+- `scope` lists `boxscore:calc` but not `basic`, whose
+  `include.in.token.scope` is off.
+- Keycloak 26.0 also answers `"active": true` for alice's **refresh token**
+  and **ID token**, even with `token_type_hint=access_token`, and both carry
+  `http://127.0.0.1:3819/mcp` in `aud`; the refresh token's `scope` even
+  includes `boxscore:calc`. Only `token_type`/`typ` tell them apart:
+  `"Refresh"` and `"ID"`. The server refuses both with `401` on that check;
+  this is the case it exists for.
+- Keycloak 26.0 ignores the RFC 8707 `resource` parameter: a token request
+  with `resource=http://127.0.0.1:3819/mcp` and without the scope got no
+  `aud` at all. The audience comes only from the mapper.
+- A token without `boxscore:calc` from a client that has no audience mapper
+  of its own (here the realm's built-in `admin-cli`) has no `aud`, so the
+  server answers `401`, not `403`: with the mapper on the scope, as in the
+  [checklist](#idp-configuration-checklist), a missing scope also means a
+  missing audience.
+- Introspection with a wrong client secret is answered `401` by Keycloak,
+  which the server reports as `503` (see the outcome table).
+
+**Failure check.** With Keycloak stopped, a token the server had not cached
+got `503` with `retry-after: 5`, and stderr said
+`OAuth introspection at http://127.0.0.1:8080/realms/boxscore/protocol/openid-connect/token/introspect failed (connection failed); answered 503`;
+alice's already accepted token kept working from the cache. Neither the
+token nor the secret appeared in the server's output.
+
+Clean up with `docker rm -f kc` (or stop `kc.sh`), stop the server, and
+delete `kc-test.sqlite` and `kc-client-secret`.
 
 ## MCP over HTTP
 

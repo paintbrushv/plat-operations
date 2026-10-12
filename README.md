@@ -63,9 +63,10 @@ output hash with every number.
 Claude Code use API keys. The claude.ai and ChatGPT remote connectors sign in
 with OAuth through your own identity provider (IdP), which the server checks
 by token introspection; that works with IdPs that offer RFC 7662
-introspection (Okta, Keycloak), not yet with Entra ID or Auth0, and the
-connector walk-throughs have not been tried against a real IdP. That page
-states exactly where it stands.
+introspection (Okta, Keycloak), not yet with Entra ID or Auth0. The server
+side has been checked against Keycloak 26.0 locally; the claude.ai and
+ChatGPT connector walk-throughs have not been tried. That page states
+exactly where it stands.
 Before you connect any assistant to real data, read what the client sends to the
 model vendor in [docs/DATA_FLOW.md](docs/DATA_FLOW.md#5-what-the-agent-client-sends-to-the-model-vendor).
 
