@@ -80,7 +80,9 @@ enum Command {
         #[arg(long, default_value_t = exact::mcp_http::DEFAULT_RATE_LIMIT)]
         rate_limit: u32,
         /// RFC 7662 introspection endpoint; default: read once at start-up
-        /// from <issuer>/.well-known/oauth-authorization-server.
+        /// from the issuer's RFC 8414 metadata (the path form
+        /// <host>/.well-known/oauth-authorization-server<path> first, then
+        /// <issuer>/.well-known/oauth-authorization-server on 404).
         #[arg(long)]
         introspection_endpoint: Option<String>,
         /// Client id this server presents to the introspection endpoint.
