@@ -29,6 +29,21 @@ SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges
 docker pull "$IMAGE"
 ```
 
+> **No published image yet.** Until the first tagged release is published to
+> GHCR (the publish job runs only on a `v*` tag), build the image locally from
+> the repository root and use it instead; skip `docker pull`. The build command
+> is the one in the Dockerfile header, and the image CI check
+> (`scripts/check_image.py`) builds and checks the image the same way:
+>
+> ```bash
+> docker build --build-arg VERSION=0.1.1 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> IMAGE=boxscore-exact:local
+> ```
+>
+> With the local image, put `boxscore-exact:local` in place of
+> `ghcr.io/paintbrushv/plat-operations:0.1.1` in the Claude Desktop snippet in
+> step 5.
+
 **1. Describe the catalog.** This is the default command. It prints one JSON
 envelope with `"status":"calculated"` listing the 12 calculations:
 
