@@ -116,6 +116,8 @@ jobs:
             echo "- image id: \`$(docker image inspect --format '{{.Id}}' "$LOCAL_IMAGE")\`"
             echo "- size: $(docker image inspect --format '{{.Size}}' "$LOCAL_IMAGE") bytes, user: \`$user\`"
           } >> "$GITHUB_STEP_SUMMARY"
+          # sbom-action writes output-file but does not create its directory.
+          mkdir -p sbom
 
       - name: SBOM of the image (distroless packages and the binary)
         uses: anchore/sbom-action@v0
