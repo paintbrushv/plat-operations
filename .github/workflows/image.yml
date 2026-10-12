@@ -10,9 +10,10 @@ name: Container image
 # GHCR as <version> and sha-<short rev>, signs it with cosign keyless and
 # attaches the image SBOM as a signed attestation.
 #
-# Actions are pinned by major version tag. Pin each one to a full commit SHA
-# when cutting a release, and re-resolve the base image digests in the
-# Dockerfile at the same time.
+# Actions are pinned to full commit SHAs (the tag is in the trailing comment).
+# Re-pin an action, resolving the new tag to its commit, whenever it is
+# upgraded, and re-resolve the base image digests in the Dockerfile at the same
+# time.
 
 on:
   push:
@@ -57,7 +58,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Read version and revision
         id: meta
@@ -72,10 +73,10 @@ jobs:
             exit 1
           fi
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build image (loaded locally, never pushed from this job)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -120,7 +121,7 @@ jobs:
           mkdir -p sbom
 
       - name: SBOM of the image (distroless packages and the binary)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.LOCAL_IMAGE }}
           format: spdx-json
@@ -129,7 +130,7 @@ jobs:
           upload-release-assets: false
 
       - name: SBOM of the Rust dependency lockfile
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           file: boxscore/Cargo.lock
           format: spdx-json
@@ -137,7 +138,7 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: boxscore-exact-sbom
           path: sbom/
@@ -150,7 +151,7 @@ jobs:
           docker save "$LOCAL_IMAGE" -o image/boxscore-exact.tar
 
       - if: ${{ inputs.push }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: boxscore-exact-image
           path: image/boxscore-exact.tar
@@ -171,23 +172,23 @@ jobs:
     env:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: boxscore-exact-image
           path: image
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: boxscore-exact-sbom
           path: sbom
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
 
       - name: Push the tested image
         id: push

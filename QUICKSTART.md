@@ -24,24 +24,29 @@ Docker flags and every option below are explained in
 sends is in [docs/DATA_FLOW.md](docs/DATA_FLOW.md).
 
 ```bash
-IMAGE=ghcr.io/paintbrushv/plat-operations:0.1.1
+IMAGE=ghcr.io/paintbrushv/plat-operations:0.2.0
 SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges"
 docker pull "$IMAGE"
 ```
 
-> **No published image yet.** Until the first tagged release is published to
-> GHCR (the publish job runs only on a `v*` tag), build the image locally from
-> the repository root and use it instead; skip `docker pull`. The build command
-> is the one in the Dockerfile header, and the image CI check
-> (`scripts/check_image.py`) builds and checks the image the same way:
+> **Published image.** Release 0.2.0 is the first version pushed to GHCR, as
+> `ghcr.io/paintbrushv/plat-operations:0.2.0` (`linux/amd64`; the same digest is
+> also tagged `sha-<first 7 hex of the commit>`, and there is no `latest` tag).
+> The release workflow signs each image with cosign keyless signing and attaches
+> its SBOM as a signed attestation. Verify both before first use with the
+> commands in [Verify the image](docs/INSTALL.md#verify-the-image).
+>
+> To build the image yourself instead, skip `docker pull` and run this from the
+> repository root (the command is the one in the Dockerfile header, and
+> `scripts/check_image.py` builds and checks the image the same way):
 >
 > ```bash
-> docker build --build-arg VERSION=0.1.1 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
 > IMAGE=boxscore-exact:local
 > ```
 >
 > With the local image, put `boxscore-exact:local` in place of
-> `ghcr.io/paintbrushv/plat-operations:0.1.1` in the Claude Desktop snippet in
+> `ghcr.io/paintbrushv/plat-operations:0.2.0` in the Claude Desktop snippet in
 > step 5.
 
 **1. Describe the catalog.** This is the default command. It prints one JSON
@@ -96,7 +101,7 @@ You should see `"status":"calculated"` and, in `variance.noi_bridge`,
         "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "-v", "boxscore-data:/data",
-        "ghcr.io/paintbrushv/plat-operations:0.1.1",
+        "ghcr.io/paintbrushv/plat-operations:0.2.0",
         "mcp", "--database", "/data/exact.sqlite"
       ]
     }
