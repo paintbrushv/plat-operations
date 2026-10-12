@@ -35,7 +35,7 @@ COPY boxscore/src ./src
 # can create its database there. The image ships it empty.
 RUN cargo build --locked --offline --release --bin boxscore-exact \
  && install -D -m 0755 target/release/boxscore-exact /out/bin/boxscore-exact \
- && install -d -m 0700 /out/data
+ && install -d -m 0700 /out/root/data
 
 # --- runtime ----------------------------------------------------------------
 # Distroless C runtime (glibc, libgcc): no shell, no package manager.
@@ -52,9 +52,11 @@ LABEL org.opencontainers.image.title="boxscore-exact" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 # Only the binary (root-owned, not writable by the runtime user) and the
-# empty data directory (owned by the runtime user, mode 0700).
+# empty data directory (owned by the runtime user, mode 0700). COPY of a
+# directory copies its contents and creates the target with mode 0755, so the
+# parent is copied instead: `data` is then an entry and keeps its 0700.
 COPY --from=builder /out/bin/boxscore-exact /usr/local/bin/boxscore-exact
-COPY --from=builder --chown=65532:65532 /out/data /data
+COPY --from=builder --chown=65532:65532 /out/root/ /
 
 # distroless "nonroot" (uid/gid 65532), stated explicitly so `docker inspect`
 # shows it and the CI job can assert it.

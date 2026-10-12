@@ -159,7 +159,7 @@ def check_filesystem(image):
     data = members.get("data")
     check(data is not None and data.isdir(), "/data exists in the image")
     check(data.uid == RUNTIME_UID and data.gid == RUNTIME_UID, "/data is owned by the runtime user")
-    check(data.mode & 0o777 == 0o700, "/data is mode 0700")
+    check(data.mode & 0o777 == 0o700, f"/data is mode 0700 (found {data.mode & 0o777:o})")
     check(not [n for n in members if n.startswith("data/")], "/data ships empty")
     baked = sorted(n for n in members if n.endswith(DATA_SUFFIXES))
     check(not baked, f"no database or data file is baked into the image {baked or ''}".rstrip())
