@@ -3,7 +3,8 @@ name: Container image
 # Builds the boxscore-exact image from the root Dockerfile, proves it works and
 # is locked down (scripts/check_image.py: non-root, no shell, no baked data,
 # describe / init / import-csv / review / MCP stdio on synthetic data, all with
-# --network none --read-only), and generates SBOMs. Nothing is pushed on pull
+# --network none --read-only; and `serve` with a synthetic API key on the
+# default bridge network, published to 127.0.0.1 only), and generates SBOMs. Nothing is pushed on pull
 # requests or main. On release tags, release.yml calls this workflow with
 # `push: true`; the publish job then pushes the exact image that was tested to
 # GHCR as <version> and sha-<short rev>, signs it with cosign keyless and
@@ -89,7 +90,7 @@ jobs:
           cache-from: type=gha,scope=boxscore-exact
           cache-to: type=gha,mode=max,scope=boxscore-exact
 
-      - name: Check the image (config, filesystem, behaviour, backup/restore)
+      - name: Check the image (config, filesystem, behaviour, backup/restore, serve)
         run: >-
           python3 scripts/check_image.py "$LOCAL_IMAGE"
           --expect-version "${{ steps.meta.outputs.version }}"

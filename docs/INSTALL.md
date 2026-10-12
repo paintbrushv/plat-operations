@@ -3,7 +3,7 @@
 The `boxscore-exact` image runs the exact-cent calculation catalog without a
 Rust or Python toolchain. It contains one binary on a distroless base: no
 shell, no package manager, runs as a non-root user (uid 65532), and listens on
-no port. [DATA_FLOW.md](DATA_FLOW.md) describes what goes in, what is stored
+no port unless you start [`serve`](#http-server-serve). [DATA_FLOW.md](DATA_FLOW.md) describes what goes in, what is stored
 and what leaves, for an IT review. The commands below are the same ones
 [EXACT_CENTS.md](EXACT_CENTS.md) documents for the native binary.
 
@@ -19,15 +19,17 @@ docker pull "$IMAGE"
 
 ## Recommended flags
 
-Every check the CI image job runs uses these flags, and nothing the image does
-needs more:
+Every check the CI image job runs uses these flags, except that the `serve`
+check needs a network in place of `--network none` (see
+[HTTP server](#http-server-serve)). Nothing else the image does needs more:
 
 ```bash
 SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges"
 ```
 
 - `--network none`: the container has no network interface. The binary makes
-  no network connection, so nothing breaks.
+  no network connection, so nothing breaks. Only `serve`, which accepts
+  connections, needs a network interface.
 - `--read-only`: the root filesystem is read-only. The only writable place is
   the `/data` volume you mount.
 - `--cap-drop ALL`, `--security-opt no-new-privileges`: no Linux capabilities
@@ -88,6 +90,15 @@ echo '{}' | docker run --rm -i $SAFE -v boxscore-data:/data:ro "$IMAGE" \
 Any catalog function runs the same way: input JSON on stdin (`-i`), the
 provenance envelope on stdout. `call` exits 2 on a refusal.
 
+Each catalog call is traced (see
+[DATA_FLOW.md](DATA_FLOW.md#2-where-it-is-stored) and
+[PROVENANCE.md](PROVENANCE.md)). With `--database` the record goes into the
+database. Without one, nothing is recorded unless you pass
+`-e BOXSCORE_TRACE_DIR=/data` (with a volume on `/data`), which appends to
+`/data/invocations.jsonl`. Add `-e BOXSCORE_TRACE_INPUTS=1` only if the trace
+should also keep the raw input, your numbers included; by default it keeps
+hashes only. Both options work the same way on `mcp` and `serve`.
+
 ## MCP over stdio (Claude Desktop)
 
 `mcp` serves the catalog as an MCP server over stdin and stdout, so Docker
@@ -120,13 +131,76 @@ the extra flags only take privileges away. If Claude Desktop cannot find
 `docker`, give its absolute path in `command` (for example
 `/usr/local/bin/docker`). Restart Claude Desktop. Each session starts a fresh
 container, which is removed when the session ends; the database stays in the
-volume. To run stateless (only `describe` and `noi_variance`; the stateful
+volume. To run stateless (only `describe`, `noi_variance`, and `occupancy`,
+`economic_occupancy` and `delinquency` on an inline snapshot; the stateful
 tools refuse with `DATABASE_REQUIRED`), drop the `-v` pair and
 `"--database", "/data/exact.sqlite"`. The tools, the grounding rule and the
 error codes are described in
 [connectors/claude-desktop.md](connectors/claude-desktop.md).
 
 Before connecting an agent client, read
+[what the client sends to the model vendor](DATA_FLOW.md#5-what-the-agent-client-sends-to-the-model-vendor).
+
+## HTTP server (`serve`)
+
+`serve` runs the catalog as an HTTP server: MCP Streamable HTTP at `/mcp`,
+`POST /v1/calc/{function}`, `/openapi.json`, `/health` and the OAuth
+protected-resource metadata. It is not the default command, and nothing
+listens until you start it. Routes, flags and API key rules are in
+[connectors/remote-mcp.md](connectors/remote-mcp.md).
+
+Inside a container the server must bind `0.0.0.0`, and it refuses a
+non-loopback address without an API key file. Create the key file first, with
+mode 0600. On Linux, make it readable by the container user (uid 65532) and
+nobody else:
+
+```bash
+(umask 077; printf 'ops-script:%s\n' "$(openssl rand -hex 32)" > boxscore-keys)
+chmod 600 boxscore-keys
+cat boxscore-keys                       # copy the secret (after the colon) for your scripts now
+sudo chown 65532:65532 boxscore-keys    # afterwards only root and uid 65532 can read it
+```
+
+A key file that other users can read or write makes `serve` refuse to start;
+group access prints a warning. Then start the server with the key file
+mounted read-only and the port published to the host loopback only:
+
+```bash
+docker run -d --rm --name boxscore-serve \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -p 127.0.0.1:3819:3819 \
+  -v boxscore-data:/data \
+  -v "$PWD/boxscore-keys:/run/secrets/boxscore-keys:ro" \
+  "$IMAGE" serve --bind 0.0.0.0:3819 --database /data/exact.sqlite \
+  --api-key-file /run/secrets/boxscore-keys
+```
+
+- `-p 127.0.0.1:3819:3819` publishes the port on the host's loopback
+  interface only. Do not publish it on all interfaces (`-p 3819:3819`); for
+  access from other machines, put a TLS reverse proxy in front and pass
+  `--public-url https://...` (see
+  [remote-mcp.md](connectors/remote-mcp.md#tls)).
+- `--network none` cannot be used here: the server needs a network interface
+  to accept connections. It still opens no outbound connection.
+- Drop `--database /data/exact.sqlite` (and the volume) to serve only the
+  stateless functions.
+- Add `-e BOXSCORE_TRACE_DIR=/data` (useful only without `--database`) or
+  `-e BOXSCORE_TRACE_INPUTS=1` as described under [One-liners](#one-liners).
+- `docker stop boxscore-serve` stops it gracefully (exit code 0). Its Docker
+  log holds only the start-up and shutdown lines; requests, tokens and
+  results are not logged.
+
+Check that it is up, then call it with the key:
+
+```bash
+curl http://127.0.0.1:3819/health
+# {"producer":{...},"status":"ok"}
+curl -s -X POST http://127.0.0.1:3819/v1/calc/describe -H "Authorization: Bearer $BOXSCORE_KEY"
+```
+
+The CI image job runs the same `serve` command with a synthetic key file and
+checks `/health`, the metadata route, the `401` challenge without a token and
+an MCP `initialize` with it. Before connecting a remote assistant, read
 [what the client sends to the model vendor](DATA_FLOW.md#5-what-the-agent-client-sends-to-the-model-vendor).
 
 ## Volume layout
@@ -136,7 +210,9 @@ Before connecting an agent client, read
 | `/data` | the named volume (`boxscore-data` above); also the working directory | uid 65532, `0700` |
 | `/data/exact.sqlite` | the database: every revision, snapshot and issued report | uid 65532, `0600` |
 | `/data/exact.sqlite-journal` | SQLite rollback journal, present only while a write is in progress | uid 65532, `0600` |
+| `/data/invocations.jsonl` | the JSONL invocation trace, only with `-e BOXSCORE_TRACE_DIR=/data` and no `--database` | uid 65532, `0600` |
 | `/in` (your bind mount, read-only) | the exports you import; not part of the image | yours |
+| `/run/secrets/boxscore-keys` (your bind mount, read-only) | API keys for `serve`; not part of the image | uid 65532, `0600` |
 
 The image ships `/data` empty. A new named volume copies its owner and mode,
 which is why the non-root process can create the database there. To use a host
@@ -146,8 +222,8 @@ directory instead of a named volume, create it with owner 65532 and mode 0700
 
 ## Back up and restore
 
-Stop every container using the volume first (quit Claude Desktop, let any
-`docker run` finish). Then copy the database out through a container that
+Stop every container using the volume first (quit Claude Desktop,
+`docker stop boxscore-serve`, let any `docker run` finish). Then copy the database out through a container that
 is created but never started:
 
 ```bash
@@ -188,15 +264,23 @@ no longer need to roll back.
 
 ## Health check
 
-Nothing listens until the planned `serve` command exists, so the health check
-is the stateless describe call. It exits 0 and prints `"status":"calculated"`:
+For one-shot commands and the stdio MCP server nothing listens, so the health
+check is the stateless describe call. It exits 0 and prints
+`"status":"calculated"`:
 
 ```bash
 docker run --rm $SAFE "$IMAGE" call --function describe
 ```
 
-The image defines no `HEALTHCHECK`; a stdio MCP session or a one-shot command
-has nothing to probe.
+For a running `serve` container, probe `/health` from the host; it needs no
+token and answers `200` with `"status":"ok"`:
+
+```bash
+curl http://127.0.0.1:3819/health
+```
+
+The image defines no `HEALTHCHECK`: the default command does not listen, and
+the image has no shell or `curl` to probe with.
 
 ## Verify the image
 
