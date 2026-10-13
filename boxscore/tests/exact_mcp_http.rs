@@ -38,6 +38,7 @@ fn config(database: Option<PathBuf>) -> Config {
         rate_limit_per_minute: 60,
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: false,
+        loopback_port: None,
     }
 }
 

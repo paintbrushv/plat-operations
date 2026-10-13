@@ -201,9 +201,10 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   this way, with a 0600 key file mounted read-only; it runs the container as
   the CI user that owns that file, because handing the file to uid 65532
   needs root on the host (INSTALL.md does that with `chown`)]
-- `/health`, `/openapi.json` and the OAuth protected-resource metadata
-  (`/.well-known/oauth-protected-resource` and its `/mcp` variant) answer
-  without authentication. With a validator, everything else (`/mcp`,
+- `/health`, `/openapi.json`, the OAuth protected-resource metadata
+  (`/.well-known/oauth-protected-resource` and its `/mcp` variant) and the
+  workbench page (`/`, `/app.css`, `/app.js`) answer without
+  authentication. With a validator, everything else (`/mcp`,
   `/v1/calc/{function}`) needs `Authorization: Bearer <token>`: an API key or
   an OAuth access token. A missing or refused token gets `401` with a
   `WWW-Authenticate` challenge; an OAuth token without the required scope
@@ -212,11 +213,41 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   `POST /mcp` without one gets the `401` challenge and with an API key
   completes `initialize`; tests: `boxscore/tests/exact_mcp_http.rs`,
   `boxscore/tests/exact_mcp_http_oauth.rs`]
-- A request whose `Origin` header is not on the `--allow-origin` allowlist
-  (empty by default) gets `403`, on every route. Each caller (API key or
+- A request whose `Origin` header is neither the server's own origin (next
+  item) nor on the `--allow-origin` allowlist (empty by default) gets `403`,
+  on every route. Each caller (API key or
   OAuth subject) is rate-limited (`--rate-limit`, default 60 requests a
   minute; `429` with `Retry-After`). Request bodies over 2 MiB get `413`.
   [tests: `boxscore/tests/exact_mcp_http.rs`]
+- The server's own origin needs no `--allow-origin`: the origin of
+  `--public-url` (default `http://127.0.0.1:<port>`); for a loopback public
+  URL, its `127.0.0.1`, `localhost` and `[::1]` spellings with the same
+  scheme and port; and for a loopback bind, `http://127.0.0.1:<port>`,
+  `http://localhost:<port>` and `http://[::1]:<port>` on the bound port. A
+  default port is matched as the browser sends it, without `:80` or `:443`.
+  That is what lets the browser workbench below call the API it was served
+  with. A port remapped by Docker or a proxy is not the server's own origin
+  unless `--public-url` names it (INSTALL.md, Browser workbench). [tests:
+  `boxscore/tests/exact_workbench.rs`; CI: the `serve` check calls
+  `/v1/calc/describe` with its own origin and with another]
+- **Browser workbench.** `GET /` serves a read-only page (with `/app.css`
+  and `/app.js`) on the same port and origin as the API. The three files are
+  compiled into the binary; the page loads nothing from anywhere else (its
+  Content-Security-Policy allows this origin only) and needs no new
+  outbound connection. Loading the page needs no token; its data calls go to
+  the authenticated `/v1/calc` routes like any other client's. An API key
+  pasted into it is held in the browser's `sessionStorage` for the life of
+  the tab, sent only as `Authorization: Bearer` to this server, and never
+  put in a cookie or a URL. `sessionStorage` is copied into a duplicated
+  tab, and any page served from the same origin can read it, so give the
+  server an origin of its own (no path-prefix sharing with other apps). The
+  `/v1/calc` and `/mcp` responses carry `Cache-Control: no-store` and
+  `X-Content-Type-Options: nosniff`. This first slice lists the stored
+  revisions and reviews one; it cannot import, correct or issue reports, and
+  it does not support OAuth sign-in (use an API key, or the agent
+  connectors). [tests:
+  `boxscore/tests/exact_workbench.rs`; CI: the `serve` check fetches `/`
+  and its Content-Security-Policy]
 - It speaks plain HTTP. Terminate TLS at a reverse proxy in front of it.
   [stated]
 - The database path comes from its command line, never from a request.

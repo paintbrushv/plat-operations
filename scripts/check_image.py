@@ -17,13 +17,16 @@ daemon, using synthetic data only:
 - backup and restore with `docker cp` reproduce the same review;
 - an attempt to start a shell fails;
 - `serve`, the only check that needs a network (--network bridge, published
-  to host loopback only, otherwise the same flags), with a synthetic API key
-  file mounted read-only: /health and the OAuth protected-resource metadata
-  answer without a token, POST /mcp without a token gets 401 with the
+  to host loopback only on the container's own port, so the default public
+  URL is the URL used here, otherwise the same flags), with a synthetic API
+  key file mounted read-only: /health, the OAuth protected-resource metadata
+  and the workbench page (/, with its Content-Security-Policy) answer without
+  a token, POST /mcp without a token gets 401 with the
   WWW-Authenticate challenge and with the token completes initialize and a
-  tool call; afterwards /data holds nothing beyond what the default command
-  writes there, the logs do not contain the secret, and SIGTERM stops the
-  server with exit code 0.
+  tool call; POST /v1/calc/describe with the token is 200 from the server's
+  own Origin and 403 from another; afterwards /data holds nothing beyond
+  what the default command writes there, the logs do not contain the
+  secret, and SIGTERM stops the server with exit code 0.
 
 The expected tool set is the list of functions the image's own `describe`
 returns; MCP must list exactly those.
@@ -341,12 +344,15 @@ def check_serve(image, tools):
             docker(
                 "run", "-d", "--name", name, *SERVE_FLAGS, *mount,
                 "-v", f"{key_file}:{KEY_PATH}:ro",
-                "-p", f"127.0.0.1::{SERVE_PORT}",
+                # The same host port as the container port: the default public
+                # URL (http://127.0.0.1:3819) is then the origin a browser sends.
+                "-p", f"127.0.0.1:{SERVE_PORT}:{SERVE_PORT}",
                 image, "serve", "--bind", f"0.0.0.0:{SERVE_PORT}", "--api-key-file", KEY_PATH,
             )
             published = docker("port", name, f"{SERVE_PORT}/tcp").stdout.split()[0]
             host, _, port = published.rpartition(":")
-            check(host == "127.0.0.1", f"serve is published on host loopback only ({published})")
+            check(host == "127.0.0.1" and port == str(SERVE_PORT),
+                  f"serve is published on host loopback only, on port {SERVE_PORT} ({published})")
             base = f"http://127.0.0.1:{port}"
 
             deadline = time.monotonic() + 30
@@ -368,6 +374,10 @@ def check_serve(image, tools):
             status, _, metadata = fetch("GET", f"{base}{METADATA_PATH}")
             check(status == 200 and "boxscore:calc" in (metadata or {}).get("scopes_supported", []),
                   "GET /.well-known/oauth-protected-resource is 200 without a token")
+
+            status, headers, _ = fetch("GET", f"{base}/")
+            check(status == 200 and headers.get("Content-Security-Policy", "").startswith("default-src 'none'"),
+                  "GET / serves the workbench page without a token, with its Content-Security-Policy")
 
             mcp_headers = {
                 "Content-Type": "application/json",
@@ -399,6 +409,21 @@ def check_serve(image, tools):
             check(status == 200 and envelope.get("status") == "calculated" and names == tools,
                   "an authenticated tools/call over HTTP returns the same catalog")
             check(envelope.get("trace_store") == "none", "with no database and no trace directory nothing is traced")
+
+            calc_headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {secret}",
+            }
+            status, headers, reply = fetch("POST", f"{base}/v1/calc/describe", {},
+                                           {**calc_headers, "Origin": base})
+            check(status == 200 and (reply or {}).get("status") == "calculated"
+                  and headers.get("Cache-Control") == "no-store",
+                  "POST /v1/calc/describe from the server's own Origin is 200, not cacheable")
+            status, _, reply = fetch("POST", f"{base}/v1/calc/describe", {},
+                                     {**calc_headers, "Origin": "https://evil.example"})
+            check(status == 403 and ((reply or {}).get("error") or {}).get("code") == "ORIGIN_NOT_ALLOWED",
+                  "POST /v1/calc/describe from another Origin is 403")
 
             docker("stop", "--time", "10", name)
             code = docker("inspect", "-f", "{{.State.ExitCode}}", name).stdout.strip()

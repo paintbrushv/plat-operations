@@ -536,6 +536,7 @@ async fn introspection_has_a_timeout() {
         rate_limit_per_minute: 60,
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: true,
+        loopback_port: None,
     });
     let started = std::time::Instant::now();
     let answer = ping_with(&app, "synthetic-slow-token").await;
@@ -643,6 +644,7 @@ fn app_with(idp: &Idp, settings: IntrospectionSettings) -> Router {
         rate_limit_per_minute: 1_000,
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: true,
+        loopback_port: None,
     })
 }
 
