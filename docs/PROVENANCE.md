@@ -109,8 +109,10 @@ the function on `input_json` reproduces `output_sha256`.
   citation shows that this `function@version` turned these input bytes into
   this result. It does not show that the vendor export was complete, that
   accounts were mapped correctly, or that the right period was imported. The
-  revision `sources` record which files were used, as the importer supplied
-  them. They do not prove that those files are correct.
+  revision `sources` record which files were used: hashes the server computed
+  of the bytes it read, plus anything the caller sent under
+  `sources.supplied`, which is stored as sent and not verified. They do not
+  prove that those files are correct.
 - **It is not approval.** Reviews and reports still say
   `human_approval: not_granted`.
 - **Missing records are possible.** A call with `trace_store: "none"` left no

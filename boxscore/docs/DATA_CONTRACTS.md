@@ -66,12 +66,44 @@ versioned **profile id** and run it with `boxscore-exact import-with`;
 `boxscore-exact adapters` (and the catalog's `describe`) lists every
 registered adapter's spec.
 
+The catalog's `import_period` (1.1.0 and later) runs a registered adapter too,
+on file contents sent inline instead of paths: `profile`, `files` (adapter file
+name to that file's full UTF-8 text as a JSON string) and `options`, in place
+of `dataset`.
+
+```json
+{"profile": "canonical.csv/1",
+ "files": {"actuals": "account_code,account_name,category,amount\n4000,Gross Potential Rent,rental income,36000.00\n…",
+           "budgets": "account_code,account_name,category,amount\n…",
+           "snapshot": "{\"as_of_date\": \"2026-05-31\", …}"},
+ "options": {"property": "Sample Gardens", "period": "2026-05", "units": "24"}}
+```
+
+In memory the files are `AdapterInputs::contents` (`with_contents`), which
+`read_file` returns ahead of any path-backed file of the same name. Each inline
+file is capped at the same 2 MiB as a file on disk, and all inline files
+together at 2 MiB (`INPUT_LIMIT`). The adapter's own `sources` are identical
+either way (they hash the bytes), so the revision's `input_sha256` and per-file
+hashes match an `import-with` of the same files; `ingest::read_with` adds
+`sources.files`, one `{"name", "sha256", "bytes", "inline": true}` per inline
+file and no path. An adapter must therefore not state `sources.files` itself
+(`ADAPTER_CONTRACT` when inline files are present).
+
+`sources.supplied` is the caller's and every other key is the server's.
+`import_period` records a caller's own `sources` object under
+`sources.supplied` in both forms, and never anywhere else, so a caller cannot
+write `profile`, `files` or a hash the server records. The dataset form
+records `{"canonical_json_sha256": "<SHA-256 of the canonical dataset>"}`
+plus `supplied` when the caller sent `sources`. An adapter must not state
+`sources.supplied` (`ADAPTER_CONTRACT`). Anything under `supplied` is stored
+as sent and is not verified.
+
 ### Shipped profiles
 
 | profile | files | options | `sources` recorded |
 |---|---|---|---|
-| `canonical.csv/1` | `actuals`, `budgets` (header `account_code,account_name,category,amount`); optional `snapshot` (JSON object) | `property`, `period` (`YYYY-MM`), `units` (whole number) | `profile`, `actuals_sha256`, `budgets_sha256`, `snapshot_sha256` (null when absent) |
-| `canonical.json/1` | `input` (canonical period dataset JSON) | none | `profile`, `canonical_json_sha256` |
+| `canonical.csv/1` | `actuals`, `budgets` (header `account_code,account_name,category,amount`); optional `snapshot` (JSON object) | `property`, `period` (`YYYY-MM`), `units` (whole number) | `profile`, `actuals_sha256`, `budgets_sha256`, `snapshot_sha256` (null when absent); plus `files` for inline contents |
+| `canonical.json/1` | `input` (canonical period dataset JSON) | none | `profile`, `canonical_json_sha256`; plus `files` for inline contents |
 
 `import-csv` and `import` are aliases for these two profiles. The revision's
 `input_sha256` is the SHA-256 of the canonical `Dataset`, so the same content
@@ -124,8 +156,8 @@ An adapter maps; it does not guess. It must refuse (never coerce):
 `store::import` then validates the dataset itself (`INVALID_INPUT`,
 `SNAPSHOT_MISMATCH`, `ACCOUNT_MAPPING_CONFLICT`, `MONEY_OVERFLOW`), so an
 adapter cannot weaken the core's checks. Paths stay a host concern: the
-calculation catalog never takes a file path, and adapters run in the host
-process before `import_period`'s dataset would.
+calculation catalog never takes a file path. Adapters run in the host process
+on local files (`import-with`), or inside `import_period` on inline contents.
 
 The legacy standardized-CSV lanes below keep their `standardized-yardi`
 lineage label (`connectors::standardized::STANDARDIZED_SOURCE_SYSTEM`); they

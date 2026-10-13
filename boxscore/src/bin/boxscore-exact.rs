@@ -292,6 +292,7 @@ async fn run(command: Command) -> Result<Value> {
                     .map(|(name, path)| (name, PathBuf::from(path)))
                     .collect(),
                 options: pairs("option", options)?,
+                ..AdapterInputs::default()
             };
             import_through(
                 &database,

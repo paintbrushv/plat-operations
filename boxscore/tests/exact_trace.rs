@@ -174,7 +174,7 @@ fn trace_dir_appends_one_jsonl_line_per_call_without_a_database() {
     let record: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(record["trace_id"], envelope["trace_id"]);
     assert_eq!(record["function"], "describe");
-    assert_eq!(record["version"], "1.1.0");
+    assert_eq!(record["version"], "1.2.0");
     assert_eq!(record["caller"], "cli");
     assert_eq!(record["status"], "calculated");
     assert_eq!(record["input_sha256"], envelope["input_sha256"]);
@@ -235,7 +235,7 @@ async fn stateful_call_is_recorded_and_get_provenance_returns_the_revision_sourc
         .unwrap()
         .to_string();
     assert!(imported.citation.starts_with(&format!(
-        "boxscore import_period@1.0.0 · trace {}",
+        "boxscore import_period@1.1.0 · trace {}",
         imported.trace_id
     )));
     assert!(imported
@@ -250,7 +250,7 @@ async fn stateful_call_is_recorded_and_get_provenance_returns_the_revision_sourc
     let record = &result["trace"];
     assert_eq!(record["trace_id"], imported.trace_id.as_str());
     assert_eq!(record["function"], "import_period");
-    assert_eq!(record["version"], "1.0.0");
+    assert_eq!(record["version"], "1.1.0");
     assert_eq!(record["caller"], "test");
     assert_eq!(record["status"], "calculated");
     assert_eq!(record["input_sha256"], imported.input_sha256.as_str());
@@ -267,7 +267,16 @@ async fn stateful_call_is_recorded_and_get_provenance_returns_the_revision_sourc
     assert_eq!(result["revision"]["revision"], 1);
     assert_eq!(result["revision"]["parent_id"], Value::Null);
     assert_eq!(result["revision"]["reason"], Value::Null);
-    assert_eq!(result["revision"]["sources"], sources);
+    // The caller's sources are recorded only under `supplied`, beside the
+    // hash the server computed of the canonical dataset.
+    let recorded = result["revision"]["sources"].clone();
+    assert_eq!(recorded["supplied"], sources);
+    assert_eq!(recorded.as_object().unwrap().len(), 2, "{recorded}");
+    assert_eq!(
+        recorded["canonical_json_sha256"].as_str().unwrap().len(),
+        64,
+        "{recorded}"
+    );
     assert_eq!(result["report"], Value::Null);
     // The result agrees with the published output schema.
     let schema = catalog::find("get_provenance", None)
@@ -305,7 +314,7 @@ async fn stateful_call_is_recorded_and_get_provenance_returns_the_revision_sourc
         .citation
         .ends_with(&format!(" · revision {revision}")));
     let found = provenance(&db, &occupancy.trace_id).await;
-    assert_eq!(found.result.unwrap()["revision"]["sources"], sources);
+    assert_eq!(found.result.unwrap()["revision"]["sources"], recorded);
 }
 
 #[tokio::test]

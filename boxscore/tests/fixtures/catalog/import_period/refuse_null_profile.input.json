@@ -1,0 +1,17 @@
+{
+  "dataset": {
+    "property": "Synthetic Cedar",
+    "period": "2026-05",
+    "currency": "USD",
+    "expense_convention": "positive_costs",
+    "unit_count": 10,
+    "actuals": [
+      {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "100.00"}
+    ],
+    "budgets": [
+      {"account_code": "4000", "account_name": "Rental Income", "category": "rental income", "amount": "90.00"}
+    ],
+    "snapshot": null
+  },
+  "profile": null
+}

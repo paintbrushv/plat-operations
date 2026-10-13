@@ -126,9 +126,9 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 
 | function | stateful | what it returns |
 |---|---|---|
-| `describe@1.1.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
+| `describe@1.2.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
 | `noi_variance@1.0.0` | no | the `plat.ops/1` variance bridge from inline rows |
-| `import_period@1.0.0` | yes | `revision_id` for a canonical dataset (`supersedes` + `reason` for corrections) |
+| `import_period@1.1.0` | yes | `revision_id` for a canonical dataset, or for an adapter profile run on inline file contents (`supersedes` + `reason` for corrections) |
 | `review_period@1.0.0` | yes | the same body as `review` |
 | `issue_report@1.0.0` | yes | the same body as `issue` |
 | `list_revisions@1.0.0` | yes | stored revisions and their issued reports |
@@ -210,8 +210,41 @@ adds fields; a **major** bump may change a number for the same input. Pass
 `--version` (or `"version"` on the protocol) to pin one; a different served
 version refuses with `VERSION_MISMATCH` instead of silently answering.
 
-`describe` lists the source adapters for the operator's benefit only; the
-catalog never reads files, and `import_period` takes a dataset, not paths.
+`import_period` takes exactly one of two forms, with `supersedes`, `reason`
+and `sources` allowed beside either: `dataset` (a canonical period dataset), or
+`profile` with `files` and `options`, which runs that registered source adapter
+(the ones `describe` lists under `adapters`) on the file contents sent in the
+call. Each file is its full UTF-8 text as a JSON string, a JSON snapshot
+included:
+
+```json
+{"profile": "canonical.csv/1",
+ "files": {"actuals": "account_code,account_name,category,amount\n4000,Gross Potential Rent,rental income,36000.00\n…",
+           "budgets": "account_code,account_name,category,amount\n…",
+           "snapshot": "{\"as_of_date\": \"2026-05-31\", …}"},
+ "options": {"property": "Sample Gardens", "period": "2026-05", "units": "24"}}
+```
+
+Both or neither of `dataset` and `profile`, `files`/`options` beside
+`dataset`, or an explicit `null` for any of those four keys refuse with
+`INVALID_INPUT` (leave a key out instead); an unknown profile refuses
+`UNKNOWN_PROFILE` (listing the registered ones), and a missing, unknown or
+oversized file or option refuses as it does for `import-with` (`MISSING_FILE`,
+`UNKNOWN_FILE`, `MISSING_OPTION`, `UNKNOWN_OPTION`, `INPUT_LIMIT`). Each file is
+capped at 2 MiB and all files together at 2 MiB; the request body is also
+capped at 2 MiB of JSON, escaping included (a quote, backslash or newline in a
+file takes two bytes), so a file with many quoted fields reaches the cap
+sooner. The adapter reads the same
+bytes it would read from disk, so the same files give the same dataset, the
+same revision `input_sha256` and the same per-file hashes in `sources` as
+`boxscore-exact import-with`; the recorded `sources` also lists each inline
+file as `{"name", "sha256", "bytes", "inline": true}` under `files`. The
+dataset form records `{"canonical_json_sha256": "<hash>"}`, the SHA-256 of the
+canonical dataset. In either form a caller's own `sources` object is recorded
+under `sources.supplied` and nowhere else: `supplied` is the caller's and is
+not verified, and every other key of a revision's `sources` (`profile`,
+`files`, the per-file hashes, `canonical_json_sha256`) is written only by the
+server. The catalog never reads files from disk and takes no paths.
 Stateful functions take `--database` from the host process only. The input
 JSON has no path, SQL or network field, and the stateless `protocol` refuses
 them with `DATABASE_REQUIRED`. Legacy floating-point calculations are never
@@ -331,6 +364,9 @@ as part of these synthetic tests.
 Account-code matching tolerates different display names and category case or
 surrounding whitespace. Account codes themselves must not carry leading or
 trailing whitespace; such rows refuse with `INVALID_INPUT` rather than
-splitting one account into two. The producer uses a deterministic display name and a
+splitting one account into two. A dataset's `property` is held to the same
+rule: 1-120 characters with no leading or trailing whitespace, or the import
+refuses with `INVALID_INPUT`, so `Probe ` and `Probe` cannot become two
+property series. The producer uses a deterministic display name and a
 normalized category. Conflicting categories for one code refuse with
 `ACCOUNT_MAPPING_CONFLICT`; resolve the mapping before import or calculation.

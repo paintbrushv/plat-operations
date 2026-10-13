@@ -1,0 +1,12 @@
+{
+  "profile": "canonical.csv/1",
+  "files": {
+    "actuals": "account_code,account_name,category,amount\n4000,Gross Potential Rent,rental income,36000.00\n4010,Concessions,concessions,-1200.00\n4020,Bad Debt,bad debt,-600.00\n4100,Other Income,other income,900.00\n5000,Payroll,payroll,8000.00\n5100,Repairs and Maintenance,repairs and maintenance,3500.00\n5200,Utilities,utilities,2600.00\n5300,Insurance,insurance,1500.00\n5400,Property Taxes,property taxes,4000.00\n5500,Management Fee,management fee,1800.00\n",
+    "snapshot": "{\n  \"as_of_date\": \"2026-05-31\",\n  \"occupied_units\": 21,\n  \"vacant_units\": 2,\n  \"down_units\": 1,\n  \"market_rent_total\": \"38400.00\",\n  \"in_place_rent_total\": \"36000.00\",\n  \"delinquent_amount\": \"1500.00\",\n  \"prepaid_amount\": \"300.00\",\n  \"concessions_amount\": \"1200.00\"\n}\n"
+  },
+  "options": {
+    "property": "Sample Gardens",
+    "period": "2026-05",
+    "units": "24"
+  }
+}

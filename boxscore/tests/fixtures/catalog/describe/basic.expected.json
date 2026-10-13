@@ -1,5 +1,5 @@
 {
-  "output_sha256": "f92eff1ef622132c7b8fccc0ef724bcf408a65b732d5fbd42ccfcec604a43bcd",
+  "output_sha256": "de48f62a90bbae98de0026dd03d9f20a45af4298f5dcdf2dec2cb3aeeb14d041",
   "result": {
     "adapters": [
       {
@@ -25,7 +25,7 @@
         ],
         "options": [
           {
-            "description": "Property name, 1-120 characters",
+            "description": "Property name, 1-120 characters, no leading or trailing whitespace",
             "name": "property",
             "required": true
           },
@@ -45,9 +45,9 @@
           "INVALID_INPUT: a CSV without account_code, account_name, category, and decimal amount columns",
           "INVALID_INPUT: units that is not a whole number",
           "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
-          "INPUT_LIMIT: any file over 2 MiB, or more than 100000 GL rows",
+          "INPUT_LIMIT: any file over 2 MiB, inline files over 2 MiB in total, or more than 100000 GL rows",
           "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
-          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
           "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
           "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
           "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range"
@@ -67,9 +67,9 @@
         "profile": "canonical.json/1",
         "refuses": [
           "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
-          "INPUT_LIMIT: any file over 2 MiB, or more than 100000 GL rows",
+          "INPUT_LIMIT: any file over 2 MiB, inline files over 2 MiB in total, or more than 100000 GL rows",
           "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
-          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
           "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
           "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
           "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range"
@@ -90,7 +90,7 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
             "adapters": {
-              "description": "Source adapters the host process can import files through; the catalog itself never reads files",
+              "description": "Source adapters import_period runs on inline file contents (profile, files, options) and the host process runs on local files; the catalog never reads files from disk",
               "items": {
                 "properties": {
                   "files": {
@@ -220,7 +220,7 @@
         },
         "stateful": false,
         "summary": "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       {
         "input_schema": {
@@ -403,6 +403,26 @@
         "input_schema": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "properties": {
+                "files": false,
+                "options": false,
+                "profile": false
+              },
+              "required": [
+                "dataset"
+              ]
+            },
+            {
+              "properties": {
+                "dataset": false
+              },
+              "required": [
+                "profile"
+              ]
+            }
+          ],
           "properties": {
             "dataset": {
               "additionalProperties": false,
@@ -615,13 +635,32 @@
               ],
               "type": "object"
             },
+            "files": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Adapter file name to that file's full UTF-8 text as a JSON string (a JSON file is sent as its text). The request body is capped at 2 MiB of JSON including escaping (a quote, backslash or newline in a file takes two bytes), so the files together must come in under 2 MiB once escaped",
+              "type": "object"
+            },
+            "options": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Adapter option name to its value, as strings",
+              "type": "object"
+            },
+            "profile": {
+              "description": "Registered source adapter profile id (describe lists them), for example canonical.csv/1; give it with files and options instead of dataset",
+              "pattern": "^[a-z0-9._-]+/[1-9][0-9]*$",
+              "type": "string"
+            },
             "reason": {
               "description": "Required with supersedes",
               "maxLength": 2000,
               "type": "string"
             },
             "sources": {
-              "description": "File names and hashes behind this dataset; recorded verbatim",
+              "description": "The caller's own notes on the files behind this dataset (names, hashes); recorded under sources.supplied in either form and not verified. Every other key of the recorded sources is written by the server",
               "type": "object"
             },
             "supersedes": {
@@ -629,9 +668,6 @@
               "type": "string"
             }
           },
-          "required": [
-            "dataset"
-          ],
           "type": "object"
         },
         "name": "import_period",
@@ -648,8 +684,8 @@
           "type": "object"
         },
         "stateful": true,
-        "summary": "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason.",
-        "version": "1.0.0"
+        "summary": "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason. Instead of dataset, give profile (a registered source adapter, listed by describe) with files and options, and the server runs that adapter on the file contents, each file's full text sent as a JSON string.",
+        "version": "1.1.0"
       },
       {
         "input_schema": {
@@ -2770,5 +2806,5 @@
     }
   },
   "status": "calculated",
-  "version": "1.1.0"
+  "version": "1.2.0"
 }

@@ -11,7 +11,7 @@
           "revision_id": "<id>"
         },
         "status": "calculated",
-        "version": "1.0.0"
+        "version": "1.1.0"
       },
       "function": "import_period",
       "input": {
@@ -96,8 +96,11 @@
             "vacant_units": 1
           },
           "sources": {
-            "actuals.csv": "sha256:synthetic-actuals",
-            "budget.csv": "sha256:synthetic-budget"
+            "canonical_json_sha256": "3fd8d98bf64c7e45ccc341f2e2f077da9634fc938190e221ec84f56f36cf9705",
+            "supplied": {
+              "actuals.csv": "sha256:synthetic-actuals",
+              "budget.csv": "sha256:synthetic-budget"
+            }
           },
           "status": "calculated",
           "supersedes_revision": null,
@@ -179,8 +182,11 @@
             "vacant_units": 1
           },
           "sources": {
-            "actuals.csv": "sha256:synthetic-actuals",
-            "budget.csv": "sha256:synthetic-budget"
+            "canonical_json_sha256": "3fd8d98bf64c7e45ccc341f2e2f077da9634fc938190e221ec84f56f36cf9705",
+            "supplied": {
+              "actuals.csv": "sha256:synthetic-actuals",
+              "budget.csv": "sha256:synthetic-budget"
+            }
           },
           "status": "calculated",
           "supersedes_revision": null,
@@ -235,7 +241,7 @@
           "code": "STALE_REVISION"
         },
         "status": "refused",
-        "version": "1.0.0"
+        "version": "1.1.0"
       },
       "function": "import_period",
       "input": {
@@ -298,7 +304,7 @@
           "revision_id": "<id>"
         },
         "status": "calculated",
-        "version": "1.0.0"
+        "version": "1.1.0"
       },
       "function": "import_period",
       "input": {
@@ -467,8 +473,11 @@
               ],
               "revision": 1,
               "sources": {
-                "actuals.csv": "sha256:synthetic-actuals",
-                "budget.csv": "sha256:synthetic-budget"
+                "canonical_json_sha256": "3fd8d98bf64c7e45ccc341f2e2f077da9634fc938190e221ec84f56f36cf9705",
+                "supplied": {
+                  "actuals.csv": "sha256:synthetic-actuals",
+                  "budget.csv": "sha256:synthetic-budget"
+                }
               },
               "unit_count": 10
             },
