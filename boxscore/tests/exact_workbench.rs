@@ -591,7 +591,7 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
     assert!(js.contains("files.slice(0, MAX_FILE_ROWS)"));
     assert!(js.contains("var MAX_RAW_CHARS = 65536;"));
     assert!(js.contains("raw.slice(0, MAX_RAW_CHARS)"));
-    assert!(js.contains("importSeq") && js.contains("traceSeq"));
+    assert!(js.contains("importSeq") && js.contains("traceSeq") && js.contains("issueSeq"));
     for banned in [
         "webkitrelativepath",
         "createobjecturl",
@@ -615,8 +615,73 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
     assert!(js.contains("result.adapters"));
     assert!(!js.contains("canonical.csv"));
 
-    // Under 60 KB together.
-    assert!(html.len() + js.len() + css.len() < 60 * 1024);
+    // Issuing a report from the review screen. The only request is
+    // `issue_report` with exactly the revision id the confirmation showed,
+    // sent from the confirm button's handler and nowhere else; the old
+    // "not available here yet" wording is gone.
+    assert_eq!(js.matches(r#"calc("issue_report""#).count(), 1);
+    assert!(js.contains(r#"return calc("issue_report", { revision_id: ctx.id }).then("#));
+    assert_eq!(
+        js.matches("sendIssue(").count(),
+        1,
+        "defined, never called directly"
+    );
+    assert!(js.contains(r#"$("issue-confirm-yes").addEventListener("click", sendIssue);"#));
+    assert!(js.contains(r#"$("issue-open").addEventListener("click", openIssueConfirm);"#));
+    assert!(js.contains(r#"$("issue-confirm-no").addEventListener("click", cancelIssue);"#));
+    assert!(js.contains("var ctx = state.issueConfirm;"));
+    // Cancel sends nothing; the review's own refusal turns the button off and
+    // review_required is left to the engine (no other status is tested).
+    assert!(js.contains(r#"setStatus("Issue cancelled. Nothing was sent.");"#));
+    assert!(js.contains(r#"$("issue-open").disabled = refused;"#));
+    assert!(js.contains(r#"var refused = envelope.status === "refused";"#));
+    assert!(!js.contains(r#"=== "review_required""#));
+    // A stale response is dropped, the confirmation and button stay locked
+    // while a request is in flight, and a failure is never a success.
+    assert!(js.contains("if (seq === state.issueSeq) return finishIssue(seq, ctx.id, res);"));
+    assert!(js.contains(r#"$("issue-lock").disabled = locked;"#));
+    assert!(js.contains("|| state.issuing || state.issueConfirm ||"));
+    assert_eq!(js.matches(r#"h3("Report issued")"#).count(), 1);
+    assert!(js.contains(
+        r#""issue_report was refused: " + text(error.code) + ": " + text(error.message)"#
+    ));
+    assert!(js.contains("The answer carried no report id"));
+    // What is shown before and after: the empty state, the docs' wording
+    // that an issued report is immutable and not sent anywhere, and the
+    // citation through appendProvenance with its own element id.
+    assert!(js.contains(r#""No report issued for this revision""#));
+    assert!(js.contains("An issued report is an immutable record"));
+    assert!(js.contains("and is not sent anywhere. Issuing is a record, not sign-off."));
+    assert!(js.contains(r#"appendProvenance(out, body, { id: "issue-citation", heading: "Citation", lookup: true });"#));
+    assert!(js.contains("hashCell(r.body_sha256, false)"));
+    assert!(!js.contains("Issuing reports is not available"));
+    assert!(!html.contains("Issuing reports is not available"));
+
+    // The issue flow's warnings: a superseded revision is named from the
+    // loaded list only (the confirmation and the Issued reports block), and
+    // every failure but a refusal before the server acted may have issued
+    // the report.
+    assert!(js.contains(
+        r#""This revision has been superseded by " + ids.join(", ") + " in the loaded list. A report issued here records the superseded figures.""#
+    ));
+    assert!(js.contains("state.known[k].parent_id === id"));
+    assert_eq!(js.matches("supersededNote(later)").count(), 2);
+    assert!(js.contains(
+        r#""The server may already have issued the report: reload the list before trying again.""#
+    ));
+    assert!(
+        js.contains("if ([401, 403, 413, 429].indexOf(res.status) < 0) lines.push(MAYBE_ISSUED);")
+    );
+    assert!(js.contains(r#"failIssue(["The request ended unexpectedly.", MAYBE_ISSUED])"#));
+    // After success, a failed reload leaves the success panel and adds a note.
+    assert!(js.contains(r#""The list could not be reloaded: press Reload.""#));
+    assert!(js.contains("Promise.resolve().then(loadRevisions).then(function (applied) {"));
+    assert!(js.contains(r#""(list reload superseded; press Reload)""#));
+    assert!(js.contains("state.queued = { id: id, note: loaded };"));
+
+    // Under 72 KB together. Raised from 64 KB for slice 3's issue flow (the
+    // superseded warning, the failure caveat and the queued selection).
+    assert!(html.len() + js.len() + css.len() < 72 * 1024);
 }
 
 /// Each `<form ...>` start tag in the page.
@@ -641,15 +706,19 @@ fn page_has_the_import_and_trace_landmarks_and_no_form_target() {
         r#"<form id="import-form""#,
         r#"<select id="import-profile""#,
         r#"<form id="trace-form""#,
+        r#"<fieldset id="issue-lock">"#,
     ] {
         assert!(html.contains(landmark), "index.html lacks {landmark}");
     }
-    // Panels in order: key, load a period, loaded data, review, trace.
+    // Panels in order: key, load a period, loaded data, review (its body,
+    // then the issue block after the citation), trace.
     let order: Vec<usize> = [
         r#"id="key-panel""#,
         r#"id="import-panel""#,
         r#"id="loaded""#,
         r#"id="review""#,
+        r#"id="review-body""#,
+        r#"id="issue""#,
         r#"id="trace-panel""#,
     ]
     .iter()
@@ -661,6 +730,8 @@ fn page_has_the_import_and_trace_landmarks_and_no_form_target() {
     // CSP form-action 'none': every form is handled by script, so none has
     // an action or method (a file input's own form, if any, would be a form).
     let forms = form_tags(&html);
+    // The issue block adds no form: its buttons are handled by script inside
+    // a fieldset, so there is nothing to submit and no action to name.
     assert_eq!(forms.len(), 4, "{forms:?}");
     for tag in forms {
         let lower = tag.to_ascii_lowercase();
@@ -677,6 +748,14 @@ fn page_has_the_import_and_trace_landmarks_and_no_form_target() {
         "import-confirm-yes",
         "import-confirm-no",
         "trace-input",
+        "issue-reports",
+        "issue-open",
+        "issue-note",
+        "issue-confirm",
+        "issue-confirm-body",
+        "issue-confirm-yes",
+        "issue-confirm-no",
+        "issue-result",
     ] {
         assert!(html.contains(&format!(r#"id="{id}""#)), "no {id}");
     }
@@ -1055,4 +1134,232 @@ async fn an_inline_import_with_markup_in_a_file_round_trips_as_text() {
     .await;
     assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(missing.json()["error"]["code"], "MISSING_FILE");
+}
+
+/// What the review screen's Issue report button relies on: `issue_report` on
+/// a fresh import returns a report id, `list_revisions` then lists it with its
+/// `body_sha256` (the page's Issued reports block), issuing the same revision
+/// again is allowed and makes a second, different report, an unknown revision
+/// refuses `NOT_FOUND`, and the issue's trace id resolves to the report in the
+/// trace lookup.
+#[tokio::test]
+async fn issuing_a_report_is_listed_and_a_second_issue_makes_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("exact.sqlite");
+    let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args(["init", "--database", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(init.status.code(), Some(0));
+    let app = mcp_http::router(Config {
+        database: Some(db),
+        ..loopback_config(3819)
+    });
+    let origin = Some("http://127.0.0.1:3819");
+
+    let payload = json!({
+        "profile": "canonical.csv/1",
+        "files": {
+            "actuals": "account_code,account_name,category,amount\n4000,Rent,rental income,1000.00\n5000,Payroll,payroll,100.00\n",
+            "budgets": "account_code,account_name,category,amount\n4000,Rent,rental income,900.00\n5000,Payroll,payroll,90.00\n"
+        },
+        "options": {"property": "Synthetic Elm", "period": "2026-05", "units": "10"}
+    });
+    let imported = send(&app, calc("import_period", None, origin, &payload)).await;
+    assert_eq!(imported.status, StatusCode::OK, "{}", imported.json());
+    let revision = imported.json()["result"]["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let input = json!({"revision_id": revision});
+
+    let listed = |app: Router| async move {
+        let reply = send(&app, calc("list_revisions", None, origin, &json!({}))).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.json());
+        reply.json()["result"]["revisions"][0]["reports"].clone()
+    };
+    // Nothing issued yet: the block's empty state.
+    assert_eq!(listed(app.clone()).await, json!([]));
+
+    let first = send(&app, calc("issue_report", None, origin, &input)).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.json());
+    let first = first.json();
+    let first_id = first["result"]["report_id"].as_str().unwrap().to_owned();
+    assert!(first["result"]["issued_at"].is_string());
+    assert_eq!(first["result"]["human_approval"], "not_granted");
+    // No snapshot was loaded, so the review needs a person; the engine still
+    // issues (review_required does not block it), and says why in the body.
+    assert_eq!(first["status"], "review_required");
+    assert_eq!(
+        first["result"]["variance"]["review_reasons"],
+        json!(["missing_occupancy_snapshot"])
+    );
+    assert!(first["citation"].as_str().unwrap().contains(&first_id));
+
+    let reports = listed(app.clone()).await;
+    let reports = reports.as_array().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["id"], first_id.as_str());
+    assert_eq!(reports[0]["created_at"], first["result"]["issued_at"]);
+    let first_hash = reports[0]["body_sha256"].as_str().unwrap().to_owned();
+    assert_eq!(first_hash.len(), 64);
+    assert!(first_hash.chars().all(|c| c.is_ascii_hexdigit()));
+
+    // The issue's trace id, as a citation carries it, shows the Report
+    // section in the trace lookup.
+    let trace = first["trace_id"].as_str().unwrap();
+    let looked = send(
+        &app,
+        calc("get_provenance", None, origin, &json!({"trace_id": trace})),
+    )
+    .await;
+    assert_eq!(looked.status, StatusCode::OK, "{}", looked.json());
+    let record = looked.json();
+    assert_eq!(record["result"]["trace"]["function"], "issue_report");
+    assert_eq!(record["result"]["trace"]["report_id"], first_id.as_str());
+    assert_eq!(record["result"]["report"]["id"], first_id.as_str());
+    assert_eq!(
+        record["result"]["report"]["body_sha256"],
+        first_hash.as_str()
+    );
+
+    // The engine does not refuse a second issue for the same revision: it
+    // makes another report, with a new id and hash, and keeps the first.
+    let second = send(&app, calc("issue_report", None, origin, &input)).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.json());
+    let second = second.json();
+    assert_eq!(second["status"], "review_required");
+    let second_id = second["result"]["report_id"].as_str().unwrap();
+    assert_ne!(second_id, first_id);
+    let reports = listed(app.clone()).await;
+    let reports = reports.as_array().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0]["id"], first_id.as_str());
+    assert_eq!(reports[0]["body_sha256"], first_hash.as_str());
+    assert_eq!(reports[1]["id"], second_id);
+    assert_ne!(reports[1]["body_sha256"], first_hash.as_str());
+
+    // An unknown revision is the engine's refusal, shown as it says it.
+    let unknown = send(
+        &app,
+        calc(
+            "issue_report",
+            None,
+            origin,
+            &json!({"revision_id": "00000000-0000-0000-0000-000000000000"}),
+        ),
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(unknown.json()["status"], "refused");
+    assert_eq!(unknown.json()["error"]["code"], "NOT_FOUND");
+    assert_eq!(unknown.json()["error"]["message"], "Unknown revision");
+    assert_eq!(listed(app).await.as_array().unwrap().len(), 2);
+}
+
+/// What the review screen's superseded warning documents: the engine does not
+/// refuse `issue_report` on a revision a correction has superseded. It stores
+/// the report on the old revision, and `t12` with `issued_only` then reads
+/// that revision's figures, not the correction's.
+#[tokio::test]
+async fn issuing_a_superseded_revision_succeeds_and_t12_issued_only_uses_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("exact.sqlite");
+    let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args(["init", "--database", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(init.status.code(), Some(0));
+    let app = mcp_http::router(Config {
+        database: Some(db),
+        ..loopback_config(3820)
+    });
+    let origin = Some("http://127.0.0.1:3820");
+
+    let files = |rent: &str| {
+        json!({
+            "actuals": format!("account_code,account_name,category,amount\n4000,Rent,rental income,{rent}\n5000,Payroll,payroll,100.00\n"),
+            "budgets": "account_code,account_name,category,amount\n4000,Rent,rental income,900.00\n5000,Payroll,payroll,90.00\n"
+        })
+    };
+    let options = json!({"property": "Synthetic Oak", "period": "2026-05", "units": "10"});
+    let first = send(
+        &app,
+        calc(
+            "import_period",
+            None,
+            origin,
+            &json!({"profile": "canonical.csv/1", "files": files("1000.00"), "options": options}),
+        ),
+    )
+    .await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.json());
+    let old_id = first.json()["result"]["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let corrected = send(
+        &app,
+        calc(
+            "import_period",
+            None,
+            origin,
+            &json!({"profile": "canonical.csv/1", "files": files("1500.00"), "options": options,
+                    "supersedes": old_id, "reason": "synthetic correction"}),
+        ),
+    )
+    .await;
+    assert_eq!(corrected.status, StatusCode::OK, "{}", corrected.json());
+    let new_id = corrected.json()["result"]["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(new_id, old_id);
+
+    // The superseded revision still issues: 200, and the report is stored on it.
+    let issued = send(
+        &app,
+        calc(
+            "issue_report",
+            None,
+            origin,
+            &json!({"revision_id": old_id}),
+        ),
+    )
+    .await;
+    assert_eq!(issued.status, StatusCode::OK, "{}", issued.json());
+    let report_id = issued.json()["result"]["report_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let listed = send(&app, calc("list_revisions", None, origin, &json!({}))).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.json());
+    let listed = listed.json();
+    let rows = listed["result"]["revisions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let find = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap();
+    assert_eq!(find(&new_id)["parent_id"], old_id.as_str());
+    assert_eq!(find(&old_id)["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(find(&old_id)["reports"][0]["id"], report_id.as_str());
+    assert_eq!(find(&new_id)["reports"], json!([]));
+
+    // t12 on the issued-only policy uses the superseded revision's figures;
+    // the default policy uses the correction's.
+    let t12 = |policy: &str| {
+        let app = app.clone();
+        let input = json!({"property": "Synthetic Oak", "end_period": "2026-05", "revision_policy": policy});
+        async move {
+            let reply = send(&app, calc("t12", None, origin, &input)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.json());
+            reply.json()["result"].clone()
+        }
+    };
+    let issued_only = t12("issued_only").await;
+    let latest = t12("latest").await;
+    assert_eq!(issued_only["revisions"][11]["revision_id"], old_id.as_str());
+    assert_eq!(latest["revisions"][11]["revision_id"], new_id.as_str());
+    assert_ne!(
+        issued_only["actuals"]["noi"][11],
+        latest["actuals"]["noi"][11]
+    );
 }

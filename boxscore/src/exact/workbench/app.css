@@ -128,3 +128,4 @@ input[type="file"]::file-selector-button { font: inherit; color: inherit; backgr
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .confirm { border: 2px solid var(--warn); background: var(--warn-bg); border-radius: 6px; padding: 8px 12px; margin: 12px 0; }
 .confirm h3 { margin-top: 4px; }
+#issue { margin-top: 20px; }

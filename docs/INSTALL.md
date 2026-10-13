@@ -269,8 +269,29 @@ the revision's recorded sources (the server's file list, up to 50 rows, and
 anything the caller sent under `sources.supplied`, shown apart as not
 verified by the server).
 
-Issuing reports is not available from the page yet. Signing in with OAuth
-from the browser is not supported; use an API key, or the agent connectors.
+Below the review, **Issued reports** lists the reports already issued for
+that revision (report id, when, and the report's SHA-256, shortened with the
+whole value on hover), or says none has been. **Issue report** first shows
+what you are about to issue: the property, the period, the revision number and
+id, the review's status and its review reasons. It says that an issued report
+is an immutable record that is not sent anywhere, and that issuing is a
+record, not sign-off. Nothing is sent until you press **Confirm issue**;
+**Cancel** sends nothing. The engine decides whether a report can be issued
+(the page does not second-guess a `review_required` review, and the engine
+does not refuse to issue one), and its refusal is shown with its code and
+message as it sent them; the button is off only when the review itself was
+refused. When the loaded list shows a later revision that supersedes the
+one under review, the confirmation says so (and so does the Issued reports
+block), but the engine still issues if you confirm, recording the
+superseded figures. If the request fails without an answer (a timeout, a
+network failure or a server error), the report may already exist, so
+reload the list before trying again. Issuing the same revision again makes another report with its own id
+and hash and never changes the first. The page then shows the new report id,
+the hash and the citation line, whose Look up button opens the trace, with
+its Report section.
+
+Signing in with OAuth from the browser is not supported; use an API key, or
+the agent connectors.
 The page is served from the binary on the same port, loads nothing from
 elsewhere, and is not part of `/openapi.json`. Open it at the URL the
 server prints (`workbench at ...`): the API answers the page only from the

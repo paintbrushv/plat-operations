@@ -68,8 +68,8 @@ output hash with every number.
 [docs/connectors/remote-mcp.md](docs/connectors/remote-mcp.md).
 It also serves a browser workbench at `/` for analysts without an
 agent connection: load a period from files you choose (and correct one),
-list what is loaded, review a period with its citation, and look up a
-trace; no issuing from the page yet, and API keys
+list what is loaded, review a period with its citation, issue a report
+from the review (after a confirmation), and look up a trace; API keys
 only, no OAuth sign-in from the browser
 ([INSTALL.md](docs/INSTALL.md#browser-workbench)). Scripts and
 Claude Code use API keys. The claude.ai and ChatGPT remote connectors sign in

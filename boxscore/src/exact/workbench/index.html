@@ -87,6 +87,23 @@
   <section id="review" class="panel" aria-labelledby="review-h" hidden>
     <h2 id="review-h" tabindex="-1">Review</h2>
     <div id="review-body"></div>
+    <div id="issue" hidden>
+      <h3 id="issue-h">Issued reports</h3>
+      <div id="issue-reports"></div>
+      <fieldset id="issue-lock">
+        <div class="inline-form"><button type="button" id="issue-open">Issue report</button></div>
+        <p id="issue-note" class="note"></p>
+        <div id="issue-confirm" class="confirm" role="group" aria-labelledby="issue-confirm-h" hidden>
+          <h3 id="issue-confirm-h" tabindex="-1">Confirm issue</h3>
+          <div id="issue-confirm-body"></div>
+          <div class="inline-form">
+            <button type="button" id="issue-confirm-yes">Confirm issue</button>
+            <button type="button" id="issue-confirm-no">Cancel</button>
+          </div>
+        </div>
+      </fieldset>
+      <div id="issue-result"></div>
+    </div>
   </section>
 
   <section id="trace-panel" class="panel" aria-labelledby="trace-h">
@@ -101,7 +118,7 @@
   </section>
 </main>
 <footer class="wrap foot">
-  <p>Every figure here is a string returned by the engine; this page computes nothing. Files you choose are sent to this server and not kept by the page. Issuing reports is not available here yet.</p>
+  <p>Every figure here is a string returned by the engine; this page computes nothing. Files you choose are sent to this server and not kept by the page. An issued report is a record on the server and is not sent anywhere.</p>
 </footer>
 </body>
 </html>

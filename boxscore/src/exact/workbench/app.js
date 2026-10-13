@@ -1,5 +1,5 @@
 // boxscore workbench: a view over the server's /v1/calc routes: list and review revisions,
-// load a period from files the user chooses, look up a trace.
+// load a period from files the user chooses, issue a report, look up a trace.
 //
 // Rules this file keeps (a cargo test checks the mechanical ones):
 // - It never computes a figure. Every number shown is a string from an
@@ -53,17 +53,19 @@
   // zero-width space, say) would make fetch throw on the header.
   var KEY_CHARS = /^[\x21-\x7e]+$/;
 
-  // selected: the revision under review. reviewSeq, listSeq, importSeq and
-  // traceSeq number each request a loader starts; only the latest one's
-  // response is rendered, so overlapping requests (a double click, a second
-  // Reload) render once. known: the listed revisions by id. adapters: the
-  // server's adapter specs; fields: the form inputs built from the chosen
-  // one (DOM nodes only: file contents are read when sending and live in
-  // that request alone). confirm: a correction awaiting its confirmation.
+  // selected: the revision under review. reviewSeq, listSeq, importSeq,
+  // issueSeq and traceSeq number each request a loader starts; only the
+  // latest response is rendered. known: the listed revisions by id.
+  // adapters: the server's adapter specs; fields: the form inputs built from
+  // the chosen one (DOM nodes only: file contents live in one request).
+  // confirm: a correction awaiting confirmation. issue: the review on screen
+  // (id, envelope, listed row), all Issue report can send; issueConfirm: it,
+  // once shown for confirmation; issuing: a request is in flight; queued: a
+  // revision an import loaded meanwhile, opened when the issue finishes.
   var state = {
-    selected: null, reviewSeq: 0, listSeq: 0, importSeq: 0, traceSeq: 0,
+    selected: null, reviewSeq: 0, listSeq: 0, importSeq: 0, issueSeq: 0, traceSeq: 0,
     known: {}, adapters: [], adaptersKey: "", fields: { files: [], options: [] },
-    confirm: null, busy: false
+    confirm: null, busy: false, issue: null, issueConfirm: null, issuing: false, queued: null, listOk: false
   };
 
   function has(object, key) {
@@ -148,6 +150,18 @@
     return el("div", { className: "scroll" }, [tableNode]);
   }
 
+  function td(value, className) {
+    return el("td", { className: className, text: value });
+  }
+
+  function h3(label) {
+    return el("h3", { text: label });
+  }
+
+  function note(message) {
+    return el("p", { className: "note", text: message });
+  }
+
   function errorBlock(lines) {
     return el("div", { className: "error-block", role: "alert" }, lines.map(function (line) {
       return el("p", { text: line });
@@ -169,9 +183,25 @@
     return value === null ? "none" : text(value);
   }
 
+  function shortHash(raw) {
+    return raw.length <= 12 ? raw : raw.slice(0, 12) + "…";
+  }
+
   function hashCell(value, full) {
     var raw = text(value);
-    return el("td", { className: "mono wrap-text", title: raw, text: full || raw.length <= 12 ? raw : raw.slice(0, 12) + "…" });
+    return el("td", { className: "mono wrap-text", title: raw, text: full ? raw : shortHash(raw) });
+  }
+
+  // The review reasons with their one-line meanings, or that there are none.
+  function reasonsBlock(reasons) {
+    if (reasons.length === 0) return note("None: nothing is flagged.");
+    return el("ul", { className: "reasons" }, reasons.map(function (reason) {
+      var code = text(reason);
+      var meaning = has(REASONS, code)
+        ? REASONS[code]
+        : "No description on this page; see docs/GLOSSARY.md.";
+      return el("li", null, [el("code", { text: code }), ": " + meaning]);
+    }));
   }
 
   function statusLine(status) {
@@ -190,7 +220,7 @@
     return el("details", null, [
       el("summary", { text: summary }),
       el("pre", { className: "raw", text: cut ? raw.slice(0, MAX_RAW_CHARS) : raw }),
-      cut ? el("p", { className: "note", text: "Truncated: the first " + MAX_RAW_CHARS + " of " + raw.length + " characters." }) : null
+      cut ? note("Truncated: the first " + MAX_RAW_CHARS + " of " + raw.length + " characters.") : null
     ]);
   }
 
@@ -199,7 +229,7 @@
   // With full, whole hashes and the whole object; otherwise shortened hashes.
   function sourcesBlock(sources, full) {
     if (!sources || typeof sources !== "object" || Array.isArray(sources)) {
-      return [el("p", { className: "note", text: "No sources are recorded for this revision." })];
+      return [note("No sources are recorded for this revision.")];
     }
     var nodes = [];
     if (has(sources, "profile")) nodes.push(dl([["Profile", text(sources.profile), "mono"]]));
@@ -208,14 +238,14 @@
       nodes.push(table("Recorded files", ["Name", "Bytes", "SHA-256"], files.slice(0, MAX_FILE_ROWS).map(function (f) {
         f = f || {};
         return el("tr", null, [
-          el("td", { className: "wrap-text", text: text(f.name) }),
+          td(text(f.name), "wrap-text"),
           el("td", { className: "num", text: text(f.bytes) }),
           hashCell(f.sha256, full)
         ]);
       }), [1]));
-      if (files.length > MAX_FILE_ROWS) nodes.push(el("p", { className: "note", text: (files.length - MAX_FILE_ROWS) + " more" }));
+      if (files.length > MAX_FILE_ROWS) nodes.push(note((files.length - MAX_FILE_ROWS) + " more"));
     } else {
-      nodes.push(el("p", { className: "note", text: "The record lists no files." }));
+      nodes.push(note("The record lists no files."));
     }
     if (has(sources, "supplied")) nodes.push(rawDetails("Supplied by the caller (not verified by the server)", sources.supplied));
     if (full) nodes.push(rawDetails("All recorded sources", sources));
@@ -358,20 +388,24 @@
     var seq = ++state.listSeq;
     setStatus("Loading the list of revisions…");
     return calc("list_revisions", {}).then(function (res) {
-      if (seq !== state.listSeq) return;
+      // Resolves to whether this response was applied: false when a newer
+      // list request superseded it. state.listOk says whether it was a list.
+      if (seq !== state.listSeq) return false;
       var target = clear($("revisions"));
+      state.listOk = false;
       if (!isEnvelope(res)) {
         var lines = describeFailure(res);
         setStatus("Could not list revisions: " + lines.join(" · "), true);
         target.appendChild(errorBlock(lines));
-        return;
+        return true;
       }
       var envelope = res.body;
       if (envelope.status === "refused") {
         setStatus("list_revisions was refused.", true);
         target.appendChild(refusalBlock(envelope));
-        return;
+        return true;
       }
+      state.listOk = true;
       var revisions = (envelope.result && envelope.result.revisions) || [];
       state.known = {};
       if (Array.isArray(revisions)) {
@@ -380,13 +414,14 @@
         });
       }
       if (!Array.isArray(revisions) || revisions.length === 0) {
-        target.appendChild(el("p", { className: "note", text: "No revisions are stored in this server's database yet." }));
+        target.appendChild(note("No revisions are stored in this server's database yet."));
         setStatus("No revisions loaded.");
-        return;
+        return true;
       }
       target.appendChild(revisionTable(revisions));
-      target.appendChild(el("p", { className: "note", text: envelope.citation ? "Listed by " + envelope.citation : "" }));
+      target.appendChild(note(envelope.citation ? "Listed by " + envelope.citation : ""));
       setStatus(revisions.length + (revisions.length === 1 ? " revision" : " revisions") + " loaded. Select one to review it.");
+      return true;
     });
   }
 
@@ -403,12 +438,12 @@
         "data-revision": text(rev.id),
         "aria-label": "Review " + text(rev.property) + " " + text(rev.period) + " revision " + text(rev.revision)
       }, [
-        el("td", { className: "wrap-text", text: text(rev.property) }),
-        el("td", { text: text(rev.period) }),
+        td(text(rev.property), "wrap-text"),
+        td(text(rev.period)),
         el("td", { className: "num", text: text(rev.revision) }),
         el("td", { className: "mono", title: text(rev.id), text: shortId(rev.id) }),
         el("td", { className: "num", text: text(rev.unit_count) }),
-        el("td", { text: rev.created_at ? text(rev.created_at) : "" }),
+        td(rev.created_at ? text(rev.created_at) : ""),
         el("td", { className: "wrap-text", title: rev.parent_id ? text(rev.parent_id) : null, text: correction }),
         el("td", { title: reportIds.join("\n") || null, text: reports.length ? reports.length + " issued" : "none" })
       ]);
@@ -445,10 +480,19 @@
       setStatus("Paste a revision id first.", true);
       return;
     }
+    if (state.issuing) {
+      setStatus("A report is being issued. Wait for it before reviewing another revision.", true);
+      return;
+    }
+    if (state.selected !== id) clear($("issue-result"));
     state.selected = id;
     prefillSupersedes();
     var seq = ++state.reviewSeq;
     markSelected(id);
+    endIssueConfirm();
+    state.issue = null;
+    state.queued = null;
+    $("issue").hidden = true;
     $("review").hidden = false;
     setStatus("Reviewing revision " + id + "…");
     calc("review_period", { revision_id: id }).then(function (res) {
@@ -460,18 +504,17 @@
         body.appendChild(errorBlock(lines));
       } else {
         renderReview(body, res.body);
+        renderIssue(res.body);
         setStatus(note + "Review of revision " + id + ": " + text(res.body.status) + ".", res.body.status === "refused");
       }
       $("review-h").focus();
     });
   }
 
-  // Class parity with the engine: classify on the exact category string the
-  // engine returned, with no trim and no case change. The engine has already
-  // trimmed and lowercased it (exact/variance.rs), and Rust's trim keeps
-  // U+FEFF while JavaScript's trim() strips it, so re-normalizing here would
-  // call a category of "\uFEFFrental income" revenue while the engine counts
-  // it as an expense. A cargo test pins the engine's side.
+  // Class parity with the engine: classify the exact category string it
+  // returned, never trimmed or lowercased here. Rust's trim keeps U+FEFF and
+  // JavaScript's strips it, so re-normalizing would call "\uFEFFrental income"
+  // revenue where the engine counts an expense. A cargo test pins the engine.
   function classOf(category) {
     var c = text(category);
     if (REVENUE_CATEGORIES.indexOf(c) >= 0) return "revenue";
@@ -504,49 +547,34 @@
 
   function renderReview(body, envelope) {
     var result = envelope.result || {};
-    var status = text(envelope.status);
-    body.appendChild(el("p", null, [
-      el("span", { className: "badge " + (has(STATUS_TEXT, status) ? status : "refused"), text: status }),
-      " ",
-      el("span", { className: "muted", text: has(STATUS_TEXT, status) ? STATUS_TEXT[status] : "" })
-    ]));
+    body.appendChild(statusLine(envelope.status));
 
-    if (status === "refused") {
+    if (envelope.status === "refused") {
       body.appendChild(refusalBlock(envelope));
       appendProvenance(body, envelope);
       return;
     }
 
     var convention = result.expense_convention;
-    body.appendChild(el("dl", { className: "meta" }, [
-      el("dt", { text: "Property" }), el("dd", { text: text(result.property) }),
-      el("dt", { text: "Period" }), el("dd", { text: text(result.period) }),
-      el("dt", { text: "Revision id" }), el("dd", { className: "mono", text: text(result.revision_id) }),
-      el("dt", { text: "Units" }), el("dd", { text: text(result.unit_count) }),
-      el("dt", { text: "Convention" }), el("dd", { text: text(result.currency) + ", " + text(convention) }),
-      el("dt", { text: "Human approval" }), el("dd", { text: text(result.human_approval) })
+    body.appendChild(dl([
+      ["Property", text(result.property)],
+      ["Period", text(result.period)],
+      ["Revision id", text(result.revision_id), "mono"],
+      ["Units", text(result.unit_count)],
+      ["Convention", text(result.currency) + ", " + text(convention)],
+      ["Human approval", text(result.human_approval)]
     ]));
 
     var variance = result.variance || {};
     var reasons = Array.isArray(variance.review_reasons) ? variance.review_reasons : [];
-    body.appendChild(el("h3", { text: "Review reasons" }));
-    if (reasons.length === 0) {
-      body.appendChild(el("p", { className: "note", text: "None: nothing is flagged." }));
-    } else {
-      body.appendChild(el("ul", { className: "reasons" }, reasons.map(function (reason) {
-        var code = text(reason);
-        var meaning = has(REASONS, code)
-          ? REASONS[code]
-          : "No description on this page; see docs/GLOSSARY.md.";
-        return el("li", null, [el("code", { text: code }), ": " + meaning]);
-      })));
-    }
+    body.appendChild(h3("Review reasons"));
+    body.appendChild(reasonsBlock(reasons));
 
     if (result.supersedes_revision) {
-      body.appendChild(el("h3", { text: "Correction" }));
-      body.appendChild(el("dl", { className: "meta" }, [
-        el("dt", { text: "Supersedes" }), el("dd", { className: "mono", text: text(result.supersedes_revision) }),
-        el("dt", { text: "Reason" }), el("dd", { text: text(result.correction_reason) })
+      body.appendChild(h3("Correction"));
+      body.appendChild(dl([
+        ["Supersedes", text(result.supersedes_revision), "mono"],
+        ["Reason", text(result.correction_reason)]
       ]));
       var changes = result.changes && typeof result.changes === "object" ? result.changes : {};
       var fields = Object.keys(changes);
@@ -554,13 +582,13 @@
         body.appendChild(table("Change in each bridge value versus the superseded revision",
           ["Field", "Change"],
           fields.map(function (field) {
-            return el("tr", null, [el("td", { className: "mono", text: field }), moneyCell(changes[field])]);
+            return el("tr", null, [td(field, "mono"), moneyCell(changes[field])]);
           }), [1]));
       }
     }
 
     var bridge = variance.noi_bridge || {};
-    body.appendChild(el("h3", { text: "NOI bridge" }));
+    body.appendChild(h3("NOI bridge"));
     var lines = [
       ["Revenue", "revenue", "actual_revenue", "budget_revenue", "revenue_variance"],
       ["Expenses", "expense", "actual_expenses", "budget_expenses", "expense_variance"],
@@ -571,21 +599,21 @@
         return el("tr", null, [el("th", { scope: "row", text: line[0] }), moneyCell(bridge[line[2]]), moneyCell(bridge[line[3]])]
           .concat(varianceCells(line[1], bridge[line[4]], convention)));
       }), [1, 2, 3]));
-    body.appendChild(el("p", { className: "note", text: "Variance is actual minus budget. Scope: " + text(result.bridge_scope) + " (accounts present in both actuals and budgets)." }));
+    body.appendChild(note("Variance is actual minus budget. Scope: " + text(result.bridge_scope) + " (accounts present in both actuals and budgets)."));
 
     var accounts = Array.isArray(variance.by_account) ? variance.by_account : [];
     var unmapped = accounts.filter(function (a) { return classOf(a && a.category) === "unmapped"; });
-    body.appendChild(el("h3", { text: "By account" }));
+    body.appendChild(h3("By account"));
     var filter = el("input", { type: "search", id: "account-filter", autocomplete: "off", spellcheck: "false" });
     body.appendChild(el("div", { className: "inline-form" }, [el("label", { for: "account-filter", text: "Filter accounts" }), filter]));
     var accountRows = accounts.map(function (a) {
       a = a || {};
       var kind = classOf(a.category);
       var row = el("tr", null, [
-        el("td", { className: "mono", text: text(a.account_code) }),
-        el("td", { className: "wrap-text", text: text(a.account_name) }),
-        el("td", { text: text(a.category) }),
-        el("td", { text: kind }),
+        td(text(a.account_code), "mono"),
+        td(text(a.account_name), "wrap-text"),
+        td(text(a.category)),
+        td(kind),
         moneyCell(a.actual),
         moneyCell(a.budget)
       ].concat(varianceCells(kind, a.variance, convention)));
@@ -593,7 +621,7 @@
       return row;
     });
     body.appendChild(table(null, ["Code", "Name", "Category", "Class", "Actual", "Budget", "Variance", "Direction"], accountRows, [4, 5, 6]));
-    body.appendChild(el("p", { className: "note", text: "Class is read from the category by the engine's rule: rental income, concessions, bad debt and other income are revenue; unmapped is kept out of NOI; any other category is an expense." }));
+    body.appendChild(note("Class is read from the category by the engine's rule: rental income, concessions, bad debt and other income are revenue; unmapped is kept out of NOI; any other category is an expense."));
     filter.addEventListener("input", function () {
       var wanted = filter.value.trim().toLowerCase();
       accountRows.forEach(function (row) {
@@ -603,29 +631,29 @@
 
     var excluded = Array.isArray(result.excluded_accounts) ? result.excluded_accounts : [];
     if (excluded.length) {
-      body.appendChild(el("h3", { text: "Excluded accounts (incomplete coverage)" }));
+      body.appendChild(h3("Excluded accounts (incomplete coverage)"));
       body.appendChild(table("Lines with no counterpart on the other side; not in the NOI bridge",
         ["Side", "Code", "Name", "Category", "Amount", "Reason"],
         excluded.map(function (x) {
           x = x || {};
           var line = x.line || {};
           return el("tr", null, [
-            el("td", { text: text(x.kind) }),
-            el("td", { className: "mono", text: text(line.account_code) }),
-            el("td", { className: "wrap-text", text: text(line.account_name) }),
-            el("td", { text: text(line.category) }),
+            td(text(x.kind)),
+            td(text(line.account_code), "mono"),
+            td(text(line.account_name), "wrap-text"),
+            td(text(line.category)),
             moneyCell(line.amount),
-            el("td", { text: text(x.reason) })
+            td(text(x.reason))
           ]);
         }), [4]));
     }
 
     if (unmapped.length) {
-      body.appendChild(el("h3", { text: "Unmapped accounts (not in NOI)" }));
+      body.appendChild(h3("Unmapped accounts (not in NOI)"));
       body.appendChild(table(null, ["Code", "Name", "Actual", "Budget"], unmapped.map(function (a) {
         return el("tr", null, [
-          el("td", { className: "mono", text: text(a.account_code) }),
-          el("td", { className: "wrap-text", text: text(a.account_name) }),
+          td(text(a.account_code), "mono"),
+          td(text(a.account_name), "wrap-text"),
           moneyCell(a.actual),
           moneyCell(a.budget)
         ]);
@@ -646,7 +674,7 @@
   // citation element, the heading, and whether it gets a Look up button.
   function appendProvenance(body, envelope, opts) {
     opts = opts || { id: "citation", heading: "Citation", lookup: true };
-    body.appendChild(el("h3", { text: opts.heading }));
+    body.appendChild(h3(opts.heading));
     body.appendChild(citationRow(citationOf(envelope), envelope.trace_id, opts.id, opts.lookup));
     body.appendChild(rawDetails("Raw envelope", envelope));
   }
@@ -729,7 +757,7 @@
     var adapter = currentAdapter();
     $("import-summary").textContent = adapter && adapter.summary ? text(adapter.summary) : "";
     if (!adapter) {
-      host.appendChild(el("p", { className: "note", text: "The server listed no source adapters." }));
+      host.appendChild(note("The server listed no source adapters."));
       return;
     }
     (Array.isArray(adapter.files) ? adapter.files : []).forEach(function (spec, i) {
@@ -945,7 +973,7 @@
     var id = typeof result.revision_id === "string" ? result.revision_id : "";
     // The form keeps its values; the file inputs are emptied.
     state.fields.files.forEach(function (f) { f.input.value = ""; });
-    out.appendChild(el("h3", { text: wasConfirm ? "Correction loaded" : "Period loaded" }));
+    out.appendChild(h3(wasConfirm ? "Correction loaded" : "Period loaded"));
     out.appendChild(statusLine(envelope.status));
     out.appendChild(dl([["Revision id", text(result.revision_id), "mono"], ["Trace id", text(envelope.trace_id), "mono"]]));
     out.appendChild(citationRow(citationOf(envelope), envelope.trace_id, null, true));
@@ -957,7 +985,7 @@
       : Promise.resolve({ failure: "The envelope carries no trace id." });
     return recorded.then(function (prov) {
       if (seq !== state.importSeq) return null;
-      sources.appendChild(el("h3", { text: "Recorded sources" }));
+      sources.appendChild(h3("Recorded sources"));
       var record = isEnvelope(prov) && prov.body.status !== "refused" && prov.body.result ? prov.body.result.revision : null;
       if (record) {
         sourcesBlock(record.sources, false).forEach(function (node) { sources.appendChild(node); });
@@ -968,7 +996,200 @@
     }).then(function () {
       if (seq !== state.importSeq) return;
       lockImport(false);
-      if (id) selectRevision(id, wasConfirm ? "Correction loaded. " : "Period loaded. ");
+      if (!id) return;
+      var loaded = wasConfirm ? "Correction loaded. " : "Period loaded. ";
+      if (state.issuing) {
+        // Opening it now would be refused: open it when the issue is done.
+        state.queued = { id: id, note: loaded };
+        setStatus(loaded + "A report is being issued; revision " + id + " opens when that finishes.");
+        return;
+      }
+      selectRevision(id, loaded);
+    });
+  }
+
+  // ---------------------------------------------------------------- issue
+
+  // Ids of the loaded revisions that supersede this one (loaded list only).
+  function supersededBy(id) {
+    return Object.keys(state.known).filter(function (k) {
+      return state.known[k] && state.known[k].parent_id === id;
+    });
+  }
+
+  function supersededNote(ids) {
+    return "This revision has been superseded by " + ids.join(", ") + " in the loaded list. A report issued here records the superseded figures.";
+  }
+
+  // The engine decides whether a report can be issued. A refused review has
+  // nothing to issue, so only then is the button off.
+  function renderIssue(envelope) {
+    var id = state.selected;
+    var row = has(state.known, id) ? state.known[id] : null;
+    var reports = row && Array.isArray(row.reports) ? row.reports : [];
+    state.issue = { id: id, envelope: envelope, row: row };
+    var host = clear($("issue-reports"));
+    var later = supersededBy(id);
+    if (later.length) host.appendChild(note(supersededNote(later)));
+    if (!row || reports.length === 0) {
+      host.appendChild(note(row ? "No report issued for this revision" : "Not in the loaded list: reload it to see reports."));
+    } else {
+      host.appendChild(table(null, ["Report id", "Issued at", "Body sha256"], reports.map(function (r) {
+        r = r || {};
+        return el("tr", null, [
+          td(text(r.id), "mono wrap-text"),
+          td(text(r.created_at)),
+          hashCell(r.body_sha256, false)
+        ]);
+      })));
+    }
+    var refused = envelope.status === "refused";
+    $("issue-open").disabled = refused;
+    $("issue-note").textContent = refused ? "The review was refused, so there is nothing to issue." : "The engine decides whether a report can be issued.";
+    $("issue").hidden = false;
+  }
+
+  // What is about to be issued, as the review on screen shows it.
+  function openIssueConfirm() {
+    var ctx = state.issue;
+    if (!ctx || state.issuing || state.issueConfirm || ctx.envelope.status === "refused") return;
+    var result = ctx.envelope.result || {};
+    var reasons = (result.variance || {}).review_reasons;
+    var body = clear($("issue-confirm-body"));
+    body.appendChild(dl([
+      ["Property", text(result.property)],
+      ["Period", text(result.period)],
+      ["Revision", ctx.row ? text(ctx.row.revision) : "(not in the loaded list)"],
+      ["Revision id", ctx.id, "mono"]
+    ]));
+    var later = supersededBy(ctx.id);
+    if (later.length) body.appendChild(note(supersededNote(later)));
+    body.appendChild(statusLine(ctx.envelope.status));
+    body.appendChild(h3("Review reasons"));
+    body.appendChild(reasonsBlock(Array.isArray(reasons) ? reasons : []));
+    body.appendChild(el("p", { text: "An issued report is an immutable record: it stores this review as it stands now, under a new report id, and is not sent anywhere. Issuing is a record, not sign-off." }));
+    state.issueConfirm = ctx;
+    $("issue-confirm").hidden = false;
+    $("issue-confirm-h").focus();
+    setStatus("Check what will be issued, then confirm or cancel. Nothing has been sent.");
+  }
+
+  function endIssueConfirm() {
+    state.issueConfirm = null;
+    $("issue-confirm").hidden = true;
+    clear($("issue-confirm-body"));
+  }
+
+  function cancelIssue() {
+    if (state.issuing) return;
+    endIssueConfirm();
+    setStatus("Issue cancelled. Nothing was sent.");
+    $("issue-open").focus();
+  }
+
+  function lockIssue(locked) {
+    $("issue-lock").disabled = locked;
+    state.issuing = locked;
+  }
+
+  // The confirmation stays on screen, locked, until the answer comes.
+  function sendIssue() {
+    var ctx = state.issueConfirm;
+    if (!ctx || state.issuing) return null;
+    var seq = ++state.issueSeq;
+    lockIssue(true);
+    clear($("issue-result"));
+    setStatus("Issuing a report for revision " + ctx.id + "…");
+    return calc("issue_report", { revision_id: ctx.id }).then(function (res) {
+      if (seq === state.issueSeq) return finishIssue(seq, ctx.id, res);
+    }).catch(function () {
+      if (seq === state.issueSeq) failIssue(["The request ended unexpectedly.", MAYBE_ISSUED]);
+    });
+  }
+
+  var RELOAD_FAILED = "The list could not be reloaded: press Reload.";
+  var MAYBE_ISSUED = "The server may already have issued the report: reload the list before trying again.";
+
+  // Nothing here is a success: the lines are the status and the panel.
+  function failIssue(lines, node) {
+    endIssueConfirm();
+    var queued = state.queued;
+    state.queued = null;
+    setStatus(lines.join(" · ") + (queued ? " Revision " + queued.id + " was loaded meanwhile: select it in the list." : ""), true);
+    clear($("issue-result")).appendChild(node || errorBlock(lines));
+    lockIssue(false);
+    $("issue-open").focus();
+  }
+
+  function finishIssue(seq, id, res) {
+    var body = res.body;
+    if (!isEnvelope(res)) {
+      var lines = describeFailure(res);
+      // Unless the server refused before doing anything, the report may exist.
+      if ([401, 403, 413, 429].indexOf(res.status) < 0) lines.push(MAYBE_ISSUED);
+      lines[0] = "Issue failed: " + lines[0];
+      return failIssue(lines);
+    }
+    if (body.status === "refused") {
+      var error = body.error || {};
+      failIssue(["issue_report was refused: " + text(error.code) + ": " + text(error.message)], refusalBlock(body));
+      $("issue-result").appendChild(citationRow(citationOf(body), body.trace_id, null, true));
+      return null;
+    }
+    var result = body.result || {};
+    if (typeof result.report_id !== "string") return failIssue(["The answer carried no report id: reload the list."]);
+    endIssueConfirm();
+    var out = clear($("issue-result"));
+    out.appendChild(h3("Report issued"));
+    out.appendChild(statusLine(body.status));
+    // The report's hash is not in the envelope: it comes from the reloaded
+    // list, which then re-renders the review with the new report.
+    var facts = dl([
+      ["Revision id", id, "mono"],
+      ["Report id", result.report_id, "mono"],
+      ["Issued at", text(result.issued_at)],
+      ["Body sha256", "(reading the list…)", "mono sha"]
+    ]);
+    out.appendChild(facts);
+    appendProvenance(out, body, { id: "issue-citation", heading: "Citation", lookup: true });
+    setStatus("Issued report " + result.report_id + ": " + text(body.status) + ". Reloading the list…");
+    // The report exists from here on: nothing after this point may replace
+    // the panel above with an error.
+    return Promise.resolve().then(loadRevisions).then(function (applied) {
+      if (seq !== state.issueSeq) return;
+      var row = state.known[id];
+      var made = applied && state.listOk && row && Array.isArray(row.reports)
+        ? row.reports.filter(function (r) { return r && r.id === result.report_id; })[0]
+        : null;
+      var sha = facts.querySelector(".sha");
+      if (made) {
+        sha.textContent = shortHash(text(made.body_sha256));
+        sha.title = text(made.body_sha256);
+      } else if (!applied) {
+        sha.textContent = "(list reload superseded; press Reload)";
+      } else if (!state.listOk) {
+        sha.textContent = "(the list was not reloaded)";
+      } else {
+        sha.textContent = "(not in the reloaded list)";
+      }
+      if (applied && !state.listOk) out.appendChild(note(RELOAD_FAILED));
+      lockIssue(false);
+      var queued = state.queued;
+      state.queued = null;
+      if (queued) {
+        selectRevision(queued.id, "Report " + result.report_id + " issued for revision " + id + ". " + queued.note);
+      } else if (state.selected === id) {
+        selectRevision(id, "Report issued. ");
+      }
+    }).catch(function () {
+      if (seq !== state.issueSeq) return;
+      var sha = facts.querySelector(".sha");
+      if (sha && sha.textContent === "(reading the list…)") sha.textContent = "(the list was not reloaded)";
+      out.appendChild(note(RELOAD_FAILED));
+      lockIssue(false);
+      var queued = state.queued;
+      state.queued = null;
+      setStatus("Report " + result.report_id + " issued. " + RELOAD_FAILED + (queued ? " Revision " + queued.id + " was loaded meanwhile." : ""), true);
     });
   }
 
@@ -1023,7 +1244,7 @@
     body.appendChild(dl(pairs));
     var revision = result.revision;
     if (revision && typeof revision === "object") {
-      body.appendChild(el("h3", { text: "Revision" }));
+      body.appendChild(h3("Revision"));
       body.appendChild(dl([
         ["Revision id", text(revision.id), "mono"],
         ["Property", text(revision.property)],
@@ -1033,12 +1254,12 @@
         ["Reason", orNone(revision.reason)],
         ["Input sha256", text(revision.input_sha256), "mono"]
       ]));
-      body.appendChild(el("h3", { text: "Recorded sources" }));
+      body.appendChild(h3("Recorded sources"));
       sourcesBlock(revision.sources, true).forEach(function (node) { body.appendChild(node); });
     }
     var report = result.report;
     if (report && typeof report === "object") {
-      body.appendChild(el("h3", { text: "Report" }));
+      body.appendChild(h3("Report"));
       body.appendChild(dl([
         ["Report id", text(report.id), "mono"],
         ["Created", text(report.created_at)],
@@ -1106,6 +1327,9 @@
       if (state.confirm) sendImport(state.confirm);
     });
     $("import-confirm-no").addEventListener("click", cancelConfirm);
+    $("issue-open").addEventListener("click", openIssueConfirm);
+    $("issue-confirm-yes").addEventListener("click", sendIssue);
+    $("issue-confirm-no").addEventListener("click", cancelIssue);
     $("trace-form").addEventListener("submit", function (event) {
       event.preventDefault();
       lookupTrace($("trace-input").value);
