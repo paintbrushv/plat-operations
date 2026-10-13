@@ -13,9 +13,23 @@
 //! profile id (`.../2`), never an edit to an existing one, so a stored
 //! revision's `sources.profile` always names the mapping that produced it.
 //!
-//! Paths are a host concern. The calculation catalog never takes a path;
-//! adapters run in the host process (`boxscore-exact import-with`) before the
-//! dataset reaches `store::import`.
+//! Paths are a host concern. The calculation catalog never takes a path:
+//! the host runs adapters over local files (`boxscore-exact import-with`), and
+//! `import_period` runs a registered adapter over file contents sent inline in
+//! the call (`AdapterInputs::with_contents`). Either way the adapter reads the
+//! same bytes, so the same files produce the same dataset and the same hashes,
+//! and the dataset reaches `store::import` the same way.
+//!
+//! Inline contents are bounded like files: each one at most 2 MiB (the bound
+//! [`read_bounded`] enforces) and all of them together at most 2 MiB. Every
+//! inline file is listed in the recorded `sources.files` as
+//! `{"name", "sha256", "bytes", "inline": true}`; path-backed files are
+//! recorded only by what the adapter itself states, as before.
+//!
+//! `sources.supplied` is reserved for the caller's own `sources` object
+//! (`import_period` puts it there); an adapter that states it refuses with
+//! `ADAPTER_CONTRACT`, as does one that states a different `profile` or, with
+//! inline files, its own `files`.
 use super::{digest, error, protocol::MAX_REQUEST_BYTES, store::Dataset, variance::Line, Result};
 use serde_json::{json, Value};
 use std::{
@@ -25,6 +39,9 @@ use std::{
 };
 
 pub const CANONICAL_CSV: &str = "canonical.csv/1";
+/// The one `sources` key a caller writes: `import_period` records the caller's
+/// own `sources` object under it. Every other key is the server's.
+pub const SUPPLIED: &str = "supplied";
 pub const CANONICAL_JSON: &str = "canonical.json/1";
 
 /// One named input file an adapter accepts.
@@ -77,10 +94,14 @@ impl AdapterSpec {
     }
 }
 
-/// Named local files and string options supplied by the host.
+/// Named files and string options supplied by the host. A file is either
+/// path-backed (`files`, read from local disk by the host process) or held in
+/// memory (`contents`, sent inline to `import_period`); when a name is in
+/// both, the in-memory bytes win.
 #[derive(Debug, Clone, Default)]
 pub struct AdapterInputs {
     pub files: BTreeMap<String, PathBuf>,
+    pub contents: BTreeMap<String, Vec<u8>>,
     pub options: BTreeMap<String, String>,
 }
 
@@ -89,12 +110,77 @@ impl AdapterInputs {
         self.files.insert(name.to_string(), path.into());
         self
     }
+    /// A named file held in memory instead of on disk.
+    pub fn with_contents(mut self, name: &str, bytes: impl Into<Vec<u8>>) -> Self {
+        self.contents.insert(name.to_string(), bytes.into());
+        self
+    }
     pub fn with_option(mut self, name: &str, value: impl Into<String>) -> Self {
         self.options.insert(name.to_string(), value.into());
         self
     }
+    /// Whether a file of this name was supplied, in memory or by path.
+    pub fn has_file(&self, name: &str) -> bool {
+        self.contents.contains_key(name) || self.files.contains_key(name)
+    }
+    /// Every supplied file name, in memory or by path, sorted and unique.
+    pub fn file_names(&self) -> impl Iterator<Item = &str> {
+        let mut names: Vec<&str> = self
+            .contents
+            .keys()
+            .chain(self.files.keys())
+            .map(String::as_str)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names.into_iter()
+    }
+    /// Refuse with `INPUT_LIMIT` when an inline file exceeds the per-file
+    /// bound [`read_bounded`] enforces, or all inline files together exceed
+    /// `MAX_REQUEST_BYTES`.
+    pub fn check_inline_limits(&self) -> Result<()> {
+        let mut total: usize = 0;
+        for (name, bytes) in &self.contents {
+            if bytes.len() > MAX_REQUEST_BYTES {
+                return Err(error(
+                    "INPUT_LIMIT",
+                    format!("Inline file {name:?} exceeds 2 MiB"),
+                ));
+            }
+            total = total.saturating_add(bytes.len());
+        }
+        if total > MAX_REQUEST_BYTES {
+            return Err(error("INPUT_LIMIT", "Inline files exceed 2 MiB in total"));
+        }
+        Ok(())
+    }
+    /// `{"name", "sha256", "bytes", "inline": true}` for each inline file, by
+    /// name. The hash is of the bytes, exactly as for a path-backed file.
+    pub fn inline_sources(&self) -> Vec<Value> {
+        self.contents
+            .iter()
+            .map(|(name, bytes)| {
+                json!({
+                    "name": name,
+                    "sha256": digest(bytes),
+                    "bytes": bytes.len(),
+                    "inline": true,
+                })
+            })
+            .collect()
+    }
     /// Bytes of the named file (bounded at 2 MiB), or `None` if not supplied.
+    /// In-memory contents win over a path-backed file of the same name.
     pub fn read_file(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        if let Some(bytes) = self.contents.get(name) {
+            if bytes.len() > MAX_REQUEST_BYTES {
+                return Err(error(
+                    "INPUT_LIMIT",
+                    format!("Inline file {name:?} exceeds 2 MiB"),
+                ));
+            }
+            return Ok(Some(bytes.clone()));
+        }
         self.files.get(name).map(|p| read_bounded(p)).transpose()
     }
     /// Bytes of the named file (bounded at 2 MiB); refuses with `MISSING_FILE`.
@@ -200,7 +286,8 @@ pub fn read_with(adapter: &dyn SourceAdapter, inputs: &AdapterInputs) -> Result<
             .collect::<Vec<_>>()
             .join(", ")
     };
-    for name in inputs.files.keys() {
+    inputs.check_inline_limits()?;
+    for name in inputs.file_names() {
         if !spec.files.iter().any(|f| f.name == name) {
             return Err(error(
                 "UNKNOWN_FILE",
@@ -225,7 +312,7 @@ pub fn read_with(adapter: &dyn SourceAdapter, inputs: &AdapterInputs) -> Result<
     if let Some(missing) = spec
         .files
         .iter()
-        .find(|f| f.required && !inputs.files.contains_key(f.name))
+        .find(|f| f.required && !inputs.has_file(f.name))
     {
         return Err(error(
             "MISSING_FILE",
@@ -249,6 +336,12 @@ pub fn read_with(adapter: &dyn SourceAdapter, inputs: &AdapterInputs) -> Result<
             format!("{profile} must return sources as a JSON object"),
         ));
     };
+    if object.contains_key(SUPPLIED) {
+        return Err(error(
+            "ADAPTER_CONTRACT",
+            format!("{profile} stated sources.supplied, which records the caller's sources"),
+        ));
+    }
     match object.get("profile") {
         None => {
             object.insert("profile".into(), json!(profile));
@@ -260,6 +353,15 @@ pub fn read_with(adapter: &dyn SourceAdapter, inputs: &AdapterInputs) -> Result<
                 format!("{profile} stated a different sources.profile"),
             ))
         }
+    }
+    if !inputs.contents.is_empty() {
+        if object.contains_key("files") {
+            return Err(error(
+                "ADAPTER_CONTRACT",
+                format!("{profile} stated sources.files, which records inline files"),
+            ));
+        }
+        object.insert("files".into(), Value::Array(inputs.inline_sources()));
     }
     Ok((data, sources))
 }
@@ -293,9 +395,9 @@ pub fn csv_lines(bytes: &[u8]) -> Result<Vec<Line>> {
 const GL_HEADER: &str = "account_code,account_name,category,amount";
 const REFUSES_ALWAYS: [&str; 7] = [
     "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
-    "INPUT_LIMIT: any file over 2 MiB, or more than 100000 GL rows",
+    "INPUT_LIMIT: any file over 2 MiB, inline files over 2 MiB in total, or more than 100000 GL rows",
     "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
-    "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+    "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
     "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
     "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
     "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range",
@@ -337,7 +439,7 @@ impl SourceAdapter for CanonicalCsv {
                 OptionSpec {
                     name: "property",
                     required: true,
-                    description: "Property name, 1-120 characters",
+                    description: "Property name, 1-120 characters, no leading or trailing whitespace",
                 },
                 OptionSpec {
                     name: "period",

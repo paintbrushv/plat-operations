@@ -387,6 +387,34 @@ async fn origin_allowlist_blocks_rebinding() {
     assert_eq!(send(&closed, request).await.status, StatusCode::FORBIDDEN);
 }
 
+/// The 2 MiB cap is on the request body, so a file under 2 MiB can still be
+/// refused once its JSON escaping (each quote and newline takes two bytes)
+/// pushes the body over: 413 with `INPUT_LIMIT`, before any adapter runs.
+#[tokio::test]
+async fn inline_import_over_the_cap_once_escaped_is_413_input_limit() {
+    let cap = boxscore::exact::protocol::MAX_REQUEST_BYTES;
+    let row = "4000,\"Rent \"\"Unit A\"\"\",rental income,1.00\n";
+    let mut csv = String::from("account_code,account_name,category,amount\n");
+    while csv.len() + row.len() < cap - 4096 {
+        csv.push_str(row);
+    }
+    assert!(csv.len() < cap, "the file itself is under the cap");
+    let body = serde_json::to_vec(&json!({
+        "profile": "canonical.csv/1",
+        "files": {"actuals": csv, "budgets": "account_code,account_name,category,amount\n"},
+        "options": {"property": "Synthetic Quote", "period": "2026-05", "units": "10"},
+    }))
+    .unwrap();
+    assert!(
+        body.len() > cap,
+        "escaped body {} is over the cap",
+        body.len()
+    );
+    let reply = send(&app(), post("/v1/calc/import_period", Some(SECRET), body)).await;
+    assert_eq!(reply.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(reply.json()["error"]["code"], "INPUT_LIMIT");
+}
+
 #[tokio::test]
 async fn transport_refusals() {
     let app = app();

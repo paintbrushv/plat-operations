@@ -31,8 +31,8 @@ inline snapshot work, and the stateful tools refuse with `DATABASE_REQUIRED`.
 
 The database path is fixed for the session by these arguments. No tool
 accepts a path, SQL or network target, and a `database` field in tool
-arguments is refused as `INVALID_INPUT`. `import_period` takes the dataset
-inline only.
+arguments is refused as `INVALID_INPUT`. `import_period` takes the dataset,
+or an adapter profile with the files' contents, inline only.
 
 To run the server from the container image instead of a native binary, see
 [INSTALL.md](../INSTALL.md#mcp-over-stdio-claude-desktop).
@@ -51,7 +51,7 @@ with `isError: true` and its typed `error.code`; it is not a protocol error.
 |---|---|---|
 | `describe` | no | Lists every calculation with its version and JSON Schemas. |
 | `noi_variance` | no | Actual-versus-budget NOI bridge from inline GL rows, in checked USD cents. |
-| `import_period` | yes | Stores a canonical period dataset as a new immutable revision; a correction needs `supersedes` (the current revision id) and a `reason`. |
+| `import_period` | yes | Stores a canonical period dataset as a new immutable revision; a correction needs `supersedes` (the current revision id) and a `reason`. Instead of `dataset` it takes `profile` (for example `canonical.csv/1`), `files` (each file's full text as a JSON string) and `options`, and runs that adapter on the server. |
 | `review_period` | yes | Reviews a stored revision: matched-account NOI bridge, review reasons, excluded accounts, and changes versus the superseded revision. |
 | `issue_report` | yes | Issues an immutable report record for a revision. Review flags stay visible; human approval is never granted. |
 | `list_revisions` | yes | Lists stored revisions and their issued reports, optionally filtered by property and period. |

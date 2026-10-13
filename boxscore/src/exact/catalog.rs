@@ -24,7 +24,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 pub const PRODUCER_NAME: &str = "boxscore-exact";
 pub const ARITHMETIC: &str = "checked_i64_cents";
@@ -64,7 +64,7 @@ impl Calculation {
 pub const CATALOG: &[Calculation] = &[
     Calculation {
         name: "describe",
-        version: "1.1.0",
+        version: "1.2.0",
         summary: "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
         stateful: false,
         input_schema: schemas::empty_input,
@@ -80,8 +80,8 @@ pub const CATALOG: &[Calculation] = &[
     },
     Calculation {
         name: "import_period",
-        version: "1.0.0",
-        summary: "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason.",
+        version: "1.1.0",
+        summary: "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason. Instead of dataset, give profile (a registered source adapter, listed by describe) with files and options, and the server runs that adapter on the file contents, each file's full text sent as a JSON string.",
         stateful: true,
         input_schema: schemas::import_period_input,
         output_schema: schemas::import_period_output,
@@ -369,18 +369,91 @@ struct NoiVarianceInput {
     budgets: Vec<variance::Line>,
 }
 
+/// Exactly one of `dataset` (a canonical period dataset) or `profile` (a
+/// registered source adapter run on inline `files`, with its `options`).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ImportPeriodInput {
-    dataset: store::Dataset,
+    #[serde(default)]
+    dataset: Option<store::Dataset>,
+    #[serde(default)]
+    profile: Option<String>,
+    /// Adapter file name to that file's full text.
+    #[serde(default)]
+    files: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    options: Option<BTreeMap<String, String>>,
     #[serde(default)]
     supersedes: Option<String>,
     #[serde(default)]
     reason: Option<String>,
-    /// Free-form provenance for the files behind this dataset (names and
-    /// hashes). Recorded verbatim on the revision.
+    /// The caller's own provenance for the files behind this dataset (names
+    /// and hashes). Recorded under `sources.supplied` in either form; every
+    /// other key of the revision's `sources` is written by the server.
     #[serde(default)]
     sources: Option<Value>,
+}
+
+const IMPORT_FORMS: &str =
+    "Give exactly one of dataset, or profile with its files and options; files and options go only with profile";
+
+/// The `import_period` keys whose presence selects a form. serde reads an
+/// explicit `null` as absent, but the published schema refuses it, so the
+/// handler refuses it first.
+const IMPORT_FORM_KEYS: [&str; 4] = ["dataset", "profile", "files", "options"];
+
+fn refuse_null_form_keys(input: &Value) -> Result<()> {
+    match IMPORT_FORM_KEYS
+        .into_iter()
+        .find(|key| input.get(key).is_some_and(Value::is_null))
+    {
+        Some(key) => Err(error(
+            "INVALID_INPUT",
+            format!("{key} must not be null; leave it out instead"),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Resolve `import_period`'s input to the dataset to store and the `sources`
+/// to record with it. The profile form runs the registered adapter on the
+/// inline file contents through [`ingest::read_with`], the same path the
+/// host's `import-with` takes, so the same bytes give the same dataset and the
+/// same hashes. The dataset form records the hash of the canonical dataset.
+/// In both forms the caller's `sources` object goes under `sources.supplied`
+/// and nowhere else, so a caller cannot write a key the server owns (such as
+/// `profile` or `files`).
+fn import_dataset(input: ImportPeriodInput) -> Result<(store::Dataset, Value)> {
+    let inline_only = input.files.is_some() || input.options.is_some();
+    let (dataset, mut sources) = match (input.dataset, input.profile) {
+        (Some(dataset), None) if !inline_only => {
+            let hash = digest(&serde_json::to_vec(&dataset)?);
+            (dataset, json!({"canonical_json_sha256": hash}))
+        }
+        (None, Some(profile)) => {
+            let adapter = ingest::adapter(&profile)?;
+            let mut inputs = ingest::AdapterInputs {
+                options: input.options.unwrap_or_default(),
+                ..ingest::AdapterInputs::default()
+            };
+            for (name, text) in input.files.unwrap_or_default() {
+                inputs = inputs.with_contents(&name, text.into_bytes());
+            }
+            // read_with refuses an adapter that states `supplied` itself.
+            ingest::read_with(adapter, &inputs)?
+        }
+        _ => return Err(error("INVALID_INPUT", IMPORT_FORMS)),
+    };
+    if let Some(supplied) = input.sources {
+        let Some(object) = sources.as_object_mut() else {
+            return Err(error(
+                "INTERNAL_ERROR",
+                "Recorded sources are not a JSON object",
+            ));
+        };
+        object.insert(ingest::SUPPLIED.into(), supplied);
+    }
+    Ok((dataset, sources))
 }
 
 #[derive(Deserialize)]
@@ -448,9 +521,9 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
                     "contract_version": CONTRACT,
                     "producer": producer(),
                     "calculations": CATALOG.iter().map(Calculation::describe).collect::<Vec<_>>(),
-                    // Host-side only: adapters read local files, which the
-                    // catalog never takes. Listed so a connector can tell its
-                    // operator which profiles `import-with` accepts.
+                    // The profiles `import_period` accepts with inline file
+                    // contents, and `import-with` accepts with local files.
+                    // The catalog itself never reads files from disk.
                     "adapters": ingest::describe_adapters(),
                 }),
             ))
@@ -472,20 +545,17 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
             Ok((status, serde_json::to_value(result)?))
         }
         "import_period" => {
+            refuse_null_form_keys(&call.input)?;
             let input: ImportPeriodInput = parse(&call.input)?;
+            let (supersedes, reason) = (input.supersedes.clone(), input.reason.clone());
+            let (dataset, sources) = import_dataset(input)?;
             let database = database(calc, call)?;
-            let sources = match input.sources {
-                Some(sources) => sources,
-                None => {
-                    json!({"canonical_json_sha256": digest(&serde_json::to_vec(&input.dataset)?)})
-                }
-            };
             let pool = store::open(database, false).await?;
             let outcome = store::import(
                 &pool,
-                &input.dataset,
-                input.supersedes.as_deref(),
-                input.reason.as_deref(),
+                &dataset,
+                supersedes.as_deref(),
+                reason.as_deref(),
                 &sources,
             )
             .await;
@@ -776,7 +846,7 @@ pub mod schemas {
                 "producer": {"type": "object"},
                 "calculations": {"type": "array", "items": calculation_entry()},
                 "adapters": {"type": "array", "items": adapter_entry(),
-                             "description": "Source adapters the host process can import files through; the catalog itself never reads files"}
+                             "description": "Source adapters import_period runs on inline file contents (profile, files, options) and the host process runs on local files; the catalog never reads files from disk"}
             }
         })
     }
@@ -800,13 +870,24 @@ pub mod schemas {
     pub fn import_period_input() -> Value {
         json!({
             "$schema": DRAFT, "type": "object", "additionalProperties": false,
-            "required": ["dataset"],
             "properties": {
                 "dataset": dataset(),
+                "profile": {"type": "string", "pattern": "^[a-z0-9._-]+/[1-9][0-9]*$",
+                            "description": "Registered source adapter profile id (describe lists them), for example canonical.csv/1; give it with files and options instead of dataset"},
+                "files": {"type": "object", "additionalProperties": {"type": "string"},
+                          "description": "Adapter file name to that file's full UTF-8 text as a JSON string (a JSON file is sent as its text). The request body is capped at 2 MiB of JSON including escaping (a quote, backslash or newline in a file takes two bytes), so the files together must come in under 2 MiB once escaped"},
+                "options": {"type": "object", "additionalProperties": {"type": "string"},
+                            "description": "Adapter option name to its value, as strings"},
                 "supersedes": {"type": "string", "description": "Current revision id when this import is a correction"},
                 "reason": {"type": "string", "maxLength": 2000, "description": "Required with supersedes"},
-                "sources": {"type": "object", "description": "File names and hashes behind this dataset; recorded verbatim"}
-            }
+                "sources": {"type": "object", "description": "The caller's own notes on the files behind this dataset (names, hashes); recorded under sources.supplied in either form and not verified. Every other key of the recorded sources is written by the server"}
+            },
+            "oneOf": [
+                {"required": ["dataset"],
+                 "properties": {"profile": false, "files": false, "options": false}},
+                {"required": ["profile"],
+                 "properties": {"dataset": false}}
+            ]
         })
     }
     pub fn import_period_output() -> Value {

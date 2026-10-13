@@ -60,7 +60,7 @@ async fn fresh_database(dir: &Path) -> PathBuf {
 async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
     let envelope = catalog::invoke(&call("describe", json!({}), None)).await;
     assert_eq!(envelope.status, "calculated");
-    assert_eq!(envelope.version, Some("1.1.0"));
+    assert_eq!(envelope.version, Some("1.2.0"));
     assert_eq!(envelope.contract_version, "plat.ops/1");
     assert_eq!(envelope.producer["arithmetic"], "checked_i64_cents");
     assert_eq!(envelope.producer["name"], "boxscore-exact");
@@ -164,7 +164,7 @@ async fn refusals_keep_the_envelope_and_name_the_cause() {
     pinned.version = Some("2.0.0".into());
     let mismatch = catalog::invoke(&pinned).await;
     assert_eq!(mismatch.error.as_ref().unwrap()["code"], "VERSION_MISMATCH");
-    assert_eq!(mismatch.version, Some("1.1.0"));
+    assert_eq!(mismatch.version, Some("1.2.0"));
 
     let stateless =
         catalog::invoke(&call("review_period", json!({"revision_id": "x"}), None)).await;
@@ -212,7 +212,14 @@ async fn stateful_functions_round_trip_import_review_issue_and_list() {
         review_result["variance"]["noi_bridge"]["noi_variance"],
         "5.05"
     );
-    assert_eq!(review_result["sources"]["actuals.csv"], "sha256:abc");
+    assert_eq!(
+        review_result["sources"]["supplied"],
+        json!({"actuals.csv": "sha256:abc"})
+    );
+    assert_eq!(
+        review_result["sources"]["canonical_json_sha256"],
+        review_result["input_sha256"]
+    );
     assert_eq!(review_result["human_approval"], "not_granted");
 
     let issued = catalog::invoke(&call(
@@ -292,6 +299,11 @@ fn golden_inputs_agree_with_their_input_schemas() {
             "import_period",
             json!({"dataset": dataset("1.00"), "supersedes": "r1", "reason": "x", "sources": {}}),
         ),
+        (
+            "import_period",
+            json!({"profile": "canonical.csv/1", "files": {"actuals": "a", "budgets": "b"},
+                   "options": {"property": "p"}, "supersedes": "r1", "reason": "x", "sources": {}}),
+        ),
         ("review_period", json!({"revision_id": "r1"})),
         ("issue_report", json!({"revision_id": "r1"})),
         (
@@ -332,26 +344,12 @@ fn golden_inputs_agree_with_their_input_schemas() {
         }
         // Each oneOf branch must be satisfiable by exactly the golden inputs
         // that use its keys, and the nested snapshot keys must be known.
-        if let Some(branches) = schema["oneOf"].as_array() {
-            let matching = branches
-                .iter()
-                .filter(|branch| {
-                    let present = |k: &str| input.get(k).is_some();
-                    let required_ok = branch["required"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .all(|k| present(k.as_str().unwrap()));
-                    let forbidden_ok = branch["properties"]
-                        .as_object()
-                        .into_iter()
-                        .flatten()
-                        .filter(|(_, v)| **v == json!(false))
-                        .all(|(k, _)| !present(k));
-                    required_ok && forbidden_ok
-                })
-                .count();
-            assert_eq!(matching, 1, "{name}: {input} must match exactly one form");
+        if schema["oneOf"].is_array() {
+            assert_eq!(
+                matching_forms(&schema, &input),
+                1,
+                "{name}: {input} must match exactly one form"
+            );
             if let Some(inline) = input.get("snapshot") {
                 let snapshot_properties = properties["snapshot"]["properties"].as_object().unwrap();
                 for key in inline.as_object().unwrap().keys() {
@@ -360,10 +358,10 @@ fn golden_inputs_agree_with_their_input_schemas() {
             }
         }
         // Nested dataset keys are checked the same way.
-        if name == "import_period" {
+        if let Some(nested) = input.get("dataset").filter(|_| name == "import_period") {
             let dataset_schema = &properties["dataset"];
             let dataset_properties = dataset_schema["properties"].as_object().unwrap();
-            for key in input["dataset"].as_object().unwrap().keys() {
+            for key in nested.as_object().unwrap().keys() {
                 assert!(dataset_properties.contains_key(key), "dataset.{key}");
             }
         }
@@ -375,6 +373,68 @@ fn golden_inputs_agree_with_their_input_schemas() {
     }
     for bad in ["1,000.00", "+1.00", "1.", ".5", "1.000", "nan", " 1.00"] {
         assert!(!pattern(bad), "{bad}");
+    }
+}
+
+/// How many of the schema's `oneOf` branches the input satisfies, judged by
+/// key presence: every `required` key present and no key the branch sets to
+/// `false` present (a key present with `null` counts as present, as in JSON
+/// Schema).
+fn matching_forms(schema: &Value, input: &Value) -> usize {
+    let present = |k: &str| input.get(k).is_some();
+    schema["oneOf"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|branch| {
+            let required_ok = branch["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|k| present(k.as_str().unwrap()));
+            let forbidden_ok = branch["properties"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(_, v)| **v == json!(false))
+                .all(|(k, _)| !present(k));
+            required_ok && forbidden_ok
+        })
+        .count()
+}
+
+/// The import_period schema's two forms exclude each other: an input with
+/// both, with neither, with inline-only keys beside `dataset`, or with an
+/// explicit `null` form key matches no branch, and the engine refuses each
+/// one with `INVALID_INPUT`.
+#[tokio::test]
+async fn import_period_schema_matches_no_form_for_both_neither_or_null() {
+    let schema = catalog::find("import_period", None).unwrap().input_schema();
+    let inline = json!({"actuals": "a", "budgets": "b"});
+    let options = json!({"property": "p", "period": "2026-05", "units": "10"});
+    let cases = [
+        json!({"dataset": dataset("1.00"), "profile": "canonical.csv/1",
+               "files": inline, "options": options}),
+        json!({"dataset": dataset("1.00"), "profile": "canonical.csv/1"}),
+        json!({}),
+        json!({"supersedes": "r1", "reason": "x", "sources": {}}),
+        json!({"files": inline, "options": options}),
+        json!({"dataset": dataset("1.00"), "files": inline}),
+        json!({"dataset": dataset("1.00"), "options": options}),
+        json!({"dataset": dataset("1.00"), "profile": null}),
+        json!({"dataset": null, "profile": "canonical.csv/1", "files": inline, "options": options}),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_database(dir.path()).await;
+    for input in cases {
+        assert_eq!(matching_forms(&schema, &input), 0, "{input}");
+        let refused = catalog::invoke(&call("import_period", input.clone(), Some(&db))).await;
+        assert_eq!(refused.status, "refused", "{input}");
+        assert_eq!(
+            refused.error.as_ref().unwrap()["code"],
+            "INVALID_INPUT",
+            "{input}"
+        );
     }
 }
 

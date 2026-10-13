@@ -10,7 +10,7 @@ envelope, `result` and `output_sha256` on both transports.
 |---|---|---|
 | `POST /mcp` | bearer | MCP Streamable HTTP, protocol `2025-06-18` (`2025-03-26` accepted) |
 | `GET /mcp` | bearer | `405`: no server-initiated SSE stream |
-| `POST /v1/calc/{function}` | bearer | one catalog function; body is its input, response is the envelope |
+| `POST /v1/calc/{function}` | bearer | one catalog function; body is its input, response is the envelope. `import_period` also takes `profile`, `files` (each file's text as a JSON string) and `options` in place of `dataset` |
 | `GET /openapi.json` | none | the OpenAPI 3.1 contract; see [openapi.md](openapi.md) |
 | `GET /health` | none | `{"status":"ok","producer":{...}}` |
 | `GET /.well-known/oauth-protected-resource` | none | RFC 9728 protected-resource metadata, `resource` = the public URL |

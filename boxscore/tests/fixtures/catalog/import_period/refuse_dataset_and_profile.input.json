@@ -1,0 +1,36 @@
+{
+  "dataset": {
+    "property": "Synthetic Cedar",
+    "period": "2026-05",
+    "currency": "USD",
+    "expense_convention": "positive_costs",
+    "unit_count": 10,
+    "actuals": [
+      {
+        "account_code": "4000",
+        "account_name": "Rental Income",
+        "category": "rental income",
+        "amount": "100.00"
+      }
+    ],
+    "budgets": [
+      {
+        "account_code": "4000",
+        "account_name": "Rental Income",
+        "category": "rental income",
+        "amount": "90.00"
+      }
+    ],
+    "snapshot": null
+  },
+  "profile": "canonical.csv/1",
+  "files": {
+    "actuals": "account_code,account_name,category,amount\n4000,Gross Potential Rent,rental income,36000.00\n4010,Concessions,concessions,-1200.00\n4020,Bad Debt,bad debt,-600.00\n4100,Other Income,other income,900.00\n5000,Payroll,payroll,8000.00\n5100,Repairs and Maintenance,repairs and maintenance,3500.00\n5200,Utilities,utilities,2600.00\n5300,Insurance,insurance,1500.00\n5400,Property Taxes,property taxes,4000.00\n5500,Management Fee,management fee,1800.00\n",
+    "budgets": "account_code,account_name,category,amount\n4000,Gross Potential Rent,rental income,38400.00\n4010,Concessions,concessions,-400.00\n4020,Bad Debt,bad debt,-200.00\n4100,Other Income,other income,800.00\n5000,Payroll,payroll,7500.00\n5100,Repairs and Maintenance,repairs and maintenance,2500.00\n5200,Utilities,utilities,2400.00\n5300,Insurance,insurance,1500.00\n5400,Property Taxes,property taxes,4000.00\n5500,Management Fee,management fee,1900.00\n"
+  },
+  "options": {
+    "property": "Sample Gardens",
+    "period": "2026-05",
+    "units": "24"
+  }
+}

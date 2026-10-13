@@ -80,6 +80,12 @@ impl Dataset {
                 "Require a property, USD, positive_costs, and a credible unit count",
             ));
         }
+        if self.property != self.property.trim() {
+            return Err(error(
+                "INVALID_INPUT",
+                "Property has leading or trailing whitespace; remove it before import",
+            ));
+        }
         let period = crate::db::normalize_period_label(&self.period)
             .map_err(|_| error("INVALID_INPUT", "Invalid YYYY-MM period"))?;
         if period != self.period {
