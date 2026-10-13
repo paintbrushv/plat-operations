@@ -205,15 +205,33 @@ fn stateless_session_lists_tools_calls_them_and_survives_bad_input() {
     }
 
     let prompts = s.request(3, "prompts/list", json!({}));
-    assert_eq!(
-        prompts["result"]["prompts"][0]["name"],
-        "boxscore_grounding"
-    );
+    let listed_prompts = prompts["result"]["prompts"].as_array().unwrap();
+    let prompt_names: Vec<&str> = listed_prompts
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(prompt_names, ["boxscore_grounding", "start_here"]);
+    for prompt in listed_prompts {
+        assert!(prompt["title"].is_string(), "{prompt}");
+        assert!(prompt["description"].is_string(), "{prompt}");
+        assert_eq!(prompt["arguments"], json!([]));
+    }
     let prompt = s.request(4, "prompts/get", json!({"name": "boxscore_grounding"}));
     let text = prompt["result"]["messages"][0]["content"]["text"]
         .as_str()
         .unwrap();
     assert!(text.contains(GROUNDING_RULE));
+    let start = s.request(41, "prompts/get", json!({"name": "start_here"}));
+    let text = start["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert_eq!(text, boxscore::exact::mcp::start_here_text());
+    for question in boxscore::exact::mcp::START_HERE_QUESTIONS {
+        assert!(text.contains(question), "{question}");
+    }
+    assert!(text.contains(GROUNDING_RULE));
+    let unknown_prompt = s.request(42, "prompts/get", json!({"name": "no_such_prompt"}));
+    assert_eq!(unknown_prompt["error"]["code"], -32602);
 
     // A notification in the middle of requests gets no answer and does not
     // shift later responses.

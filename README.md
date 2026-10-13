@@ -8,8 +8,9 @@ months, close readiness), served to Claude as an agent that puts a citation on
 every number. The engine, not the model, does the arithmetic, and each answer
 carries a trace id and hashes you can check later.
 
-New here? Start with the [QUICKSTART](QUICKSTART.md), and see the
-[glossary](docs/GLOSSARY.md) for the terms.
+New here? Analysts start with [START_HERE](START_HERE.md); to run it
+yourself, the [QUICKSTART](QUICKSTART.md) is next. The
+[glossary](docs/GLOSSARY.md) has the terms.
 
 ## Run it without a toolchain
 

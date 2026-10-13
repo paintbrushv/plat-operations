@@ -6,6 +6,8 @@ period 2026-05), ask Claude why net operating income (NOI) missed budget, and
 see how every number in the answer can be traced back to the engine that
 computed it.
 
+Analyst, not at a command line? Read [START_HERE.md](START_HERE.md) first.
+
 What you need: either Docker (Path A) or a Rust toolchain (Path B), and Claude
 Desktop if you want to ask questions in plain English. Everything here is
 synthetic. The engine makes no network connection (what Claude Desktop itself

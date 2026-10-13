@@ -66,10 +66,25 @@ Money in and out is a decimal string with at most two places (`"100.10"`),
 never a JSON number. In an MCP response, `input_sha256` is the SHA-256 of the
 canonical JSON serialization of the tool arguments.
 
+## Prompts
+
+The server offers two MCP prompts. Neither takes arguments.
+
+| prompt | what it does |
+|---|---|
+| `start_here` | For a first session. Tells the model to call `describe` and then `list_revisions` with no filter, summarize what is loaded (properties, periods, latest revision number, whether a report is issued), offer the three questions from [START_HERE.md](../../START_HERE.md), and follow the grounding rule below. |
+| `boxscore_grounding` | The grounding rule below and what the catalog can and cannot do. |
+
+To use one in Claude Desktop, choose it where your client lists MCP prompts
+for the `boxscore-exact` server. How a client shows and sends a prompt is up
+to the client; the prompt itself is one user message of plain text, and the
+tools it names are the ones in the table above. A test keeps the three
+questions in START_HERE.md and in the `start_here` prompt the same.
+
 ## Grounding rule
 
-Every tool description, the server's `initialize` instructions and the
-`boxscore_grounding` prompt carry this rule verbatim:
+Every tool description, the server's `initialize` instructions and both
+prompts carry this rule verbatim:
 
 > Numbers come from the engine. If the tool refused, say so and ask; never
 > compute, round or restate a figure the engine did not return. Cite

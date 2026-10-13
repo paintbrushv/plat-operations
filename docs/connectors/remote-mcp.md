@@ -618,9 +618,10 @@ delete `kc-test.sqlite` and `kc-client-secret`.
 - Bodies over 2 MiB get `413`.
 - The server is stateless. It issues no `Mcp-Session-Id`, keeps no
   per-session state, and answers `GET` and `DELETE /mcp` with `405`.
-- Tools, the `boxscore_grounding` prompt, the grounding rule and the
-  envelope are the same as on stdio. See
-  [claude-desktop.md](claude-desktop.md#tools).
+- Tools, the `boxscore_grounding` and `start_here` prompts, the grounding
+  rule and the envelope are the same as on stdio. See
+  [claude-desktop.md](claude-desktop.md#tools) and
+  [claude-desktop.md](claude-desktop.md#prompts).
 
 ## Origin allowlist (DNS rebinding)
 
