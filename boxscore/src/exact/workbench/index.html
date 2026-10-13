@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>boxscore workbench</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <p class="brand"><span class="name">boxscore</span> <span class="muted">workbench</span></p>
+    <p class="server">Server <code id="server-url">(loading)</code></p>
+  </div>
+</header>
+<main class="wrap">
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+
+  <section id="key-panel" class="panel" aria-labelledby="key-h" hidden>
+    <h2 id="key-h">API key</h2>
+    <p>This server needs an API key. Paste the one your administrator gave you. It is kept in this tab's session storage only, sent as a bearer token to this server, and forgotten when the tab closes.</p>
+    <p class="muted">Signing in with your firm's identity provider (OAuth) is not supported on this page yet: use an API key, or the agent connectors.</p>
+    <form id="key-form" class="inline-form">
+      <label for="key-input">API key</label>
+      <input id="key-input" type="password" autocomplete="off" spellcheck="false" autocapitalize="off">
+      <button type="submit">Use key</button>
+      <button type="button" id="key-forget">Forget key</button>
+    </form>
+  </section>
+
+  <section id="loaded" class="panel" aria-labelledby="loaded-h">
+    <div class="section-head">
+      <h2 id="loaded-h">Loaded data</h2>
+      <button type="button" id="reload">Reload</button>
+    </div>
+    <div id="revisions"></div>
+    <form id="revision-form" class="inline-form">
+      <label for="revision-input">Or paste a revision id</label>
+      <input id="revision-input" type="text" autocomplete="off" spellcheck="false" autocapitalize="off">
+      <button type="submit">Review</button>
+    </form>
+  </section>
+
+  <section id="review" class="panel" aria-labelledby="review-h" hidden>
+    <h2 id="review-h" tabindex="-1">Review</h2>
+    <div id="review-body"></div>
+  </section>
+</main>
+<footer class="wrap foot">
+  <p>Read-only. Every figure here is a string returned by the engine; this page computes nothing. Importing, corrections and issuing reports are not available here yet.</p>
+</footer>
+</body>
+</html>

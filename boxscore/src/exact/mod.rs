@@ -14,6 +14,7 @@ pub mod store;
 pub mod t12;
 pub mod trace;
 pub mod variance;
+pub mod workbench;
 
 pub const CONTRACT: &str = "plat.ops/1";
 /// `user_version` of an exact-cent database. 2 added `exact_invocations`.

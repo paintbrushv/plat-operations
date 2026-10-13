@@ -219,9 +219,45 @@ curl -s -X POST http://127.0.0.1:3819/v1/calc/describe -H "Authorization: Bearer
 ```
 
 The CI image job runs the same `serve` command with a synthetic key file and
-checks `/health`, the metadata route, the `401` challenge without a token and
-an MCP `initialize` with it. Before connecting a remote assistant, read
+checks `/health`, the metadata route, the workbench page at `/`, the `401`
+challenge without a token, an MCP `initialize` with it, and that
+`/v1/calc/describe` answers the server's own origin and refuses another.
+Before connecting a remote assistant, read
 [what the client sends to the model vendor](DATA_FLOW.md#5-what-the-agent-client-sends-to-the-model-vendor).
+
+### Browser workbench
+
+`serve` also offers a small read-only page for analysts without an agent
+connection. Open the server's public URL with a trailing slash in a browser
+(`http://127.0.0.1:3819/` with the command above), paste an API key when the
+page asks for one (it is kept in that tab's session storage only), and pick
+a revision from the list to see its review: status and review reasons, the
+NOI bridge, every account, excluded and unmapped accounts, and the citation
+line with a Copy button. A loopback server started without a key file asks
+for no key.
+
+This first slice is read-only: importing, corrections and issuing reports
+are not available from the page yet. Signing in with OAuth from the browser
+is not supported in this slice; use an API key, or the agent connectors.
+The page is served from the binary on the same port, loads nothing from
+elsewhere, and is not part of `/openapi.json`. Open it at the URL the
+server prints (`workbench at ...`): the API answers the page only from the
+server's own origin, unless you add another with `--allow-origin`.
+
+The public URL must be the URL the browser uses. The server knows its own
+origin only from `--public-url` (default `http://127.0.0.1:<port>`, the
+container's port) and, for a loopback bind, the bound port; it cannot see
+how Docker or a proxy remapped it. Publishing the container on another host
+port, for example `-p 127.0.0.1:9000:3819` with `--bind 0.0.0.0:3819`, makes
+the browser send `Origin: http://127.0.0.1:9000`, which is refused with
+`403 ORIGIN_NOT_ALLOWED`. Pass `--public-url http://127.0.0.1:9000` (or
+`--allow-origin http://127.0.0.1:9000`) in that case, or publish on the same
+port as the command above does. The banner's `workbench at` line is built
+from the public URL, so it is the right address only when the public URL is.
+Behind a reverse proxy with a path prefix (`--public-url
+https://host/boxscore`), open the page with its trailing slash
+(`https://host/boxscore/`); it loads its files and calls the API relative to
+that address.
 
 ### With OAuth (claude.ai and ChatGPT connectors)
 

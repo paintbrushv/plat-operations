@@ -1,0 +1,814 @@
+//! The browser workbench `serve` offers at `/`: the embedded page and its
+//! headers, the implicit same-origin allowance its API calls rely on, the
+//! source rules the page keeps (DOM only, no external URL), and that hostile
+//! account names come back from the engine as plain JSON strings. The page
+//! itself cannot run in cargo tests. Synthetic data only.
+
+use axum::{
+    body::{to_bytes, Body},
+    http::{Request, StatusCode},
+    Router,
+};
+use boxscore::{
+    exact::{
+        mcp_http::{self, Config, ServeOptions, StaticKeys},
+        workbench,
+    },
+    ontology::{account_class, AccountClass},
+};
+use serde_json::{json, Value};
+use std::{path::PathBuf, process::Command, sync::Arc};
+use tower::ServiceExt;
+
+const SECRET: &str = "synthetic-test-secret-0123456789abcdef";
+const PUBLIC_URL: &str = "https://boxscore.example.test";
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const HOSTILE_NAME: &str = "<img src=x onerror=alert(1)>";
+const HOSTILE_SCRIPT: &str = "</td><script>alert(\"x\")</script>\u{7}\u{1b}[31m";
+
+fn keyed_config(database: Option<PathBuf>) -> Config {
+    Config {
+        database,
+        validator: Some(Arc::new(
+            StaticKeys::parse(&format!("ci:{SECRET}\n")).unwrap(),
+        )),
+        allowed_origins: Vec::new(),
+        public_url: PUBLIC_URL.into(),
+        authorization_servers: Vec::new(),
+        rate_limit_per_minute: 600,
+        scope: mcp_http::SCOPE.into(),
+        oauth_enabled: false,
+        loopback_port: None,
+    }
+}
+
+/// A loopback server without a validator, as `serve` builds it for
+/// `--bind 127.0.0.1:<port>`.
+fn loopback_config(port: u16) -> Config {
+    Config {
+        validator: None,
+        public_url: format!("http://127.0.0.1:{port}"),
+        loopback_port: Some(port),
+        ..keyed_config(None)
+    }
+}
+
+struct Reply {
+    status: StatusCode,
+    headers: axum::http::HeaderMap,
+    body: Vec<u8>,
+}
+
+impl Reply {
+    fn json(&self) -> Value {
+        serde_json::from_slice(&self.body).unwrap()
+    }
+    fn header(&self, name: &str) -> &str {
+        self.headers
+            .get(name)
+            .unwrap_or_else(|| panic!("no {name} header"))
+            .to_str()
+            .unwrap()
+    }
+}
+
+async fn send(app: &Router, request: Request<Body>) -> Reply {
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec();
+    Reply {
+        status,
+        headers,
+        body,
+    }
+}
+
+fn get(path: &str) -> Request<Body> {
+    Request::get(path).body(Body::empty()).unwrap()
+}
+
+fn calc(function: &str, token: Option<&str>, origin: Option<&str>, input: &Value) -> Request<Body> {
+    let mut builder = Request::post(format!("/v1/calc/{function}"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json");
+    if let Some(token) = token {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    if let Some(origin) = origin {
+        builder = builder.header("origin", origin);
+    }
+    builder
+        .body(Body::from(serde_json::to_vec(input).unwrap()))
+        .unwrap()
+}
+
+fn assert_page_headers(reply: &Reply, content_type: &str) {
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.header("content-type"), content_type);
+    assert_eq!(reply.header("content-security-policy"), CSP);
+    assert_eq!(reply.header("x-content-type-options"), "nosniff");
+    assert_eq!(reply.header("referrer-policy"), "no-referrer");
+    assert_eq!(reply.header("cache-control"), "no-store");
+}
+
+#[tokio::test]
+async fn page_and_assets_are_served_with_strict_headers() {
+    assert_eq!(workbench::CONTENT_SECURITY_POLICY, CSP);
+    let app = mcp_http::router(keyed_config(None));
+
+    let page = send(&app, get("/")).await;
+    assert_page_headers(&page, "text/html; charset=utf-8");
+    let html = String::from_utf8(page.body.clone()).unwrap();
+    assert_eq!(html, workbench::INDEX_HTML);
+    assert!(html.contains(r#"<script src="app.js" defer></script>"#));
+    assert!(html.contains(r#"<link rel="stylesheet" href="app.css">"#));
+
+    let css = send(&app, get("/app.css")).await;
+    assert_page_headers(&css, "text/css; charset=utf-8");
+    assert_eq!(css.body, workbench::APP_CSS.as_bytes());
+
+    let js = send(&app, get("/app.js")).await;
+    assert_page_headers(&js, "text/javascript; charset=utf-8");
+    assert_eq!(js.body, workbench::APP_JS.as_bytes());
+
+    // Everything else still falls through to the JSON 404.
+    for path in ["/nope", "/index.html", "/app.js/x", "/workbench/app.js"] {
+        let missing = send(&app, get(path)).await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(missing.json()["error"]["code"], "NOT_FOUND", "{path}");
+    }
+    // The page routes answer GET only.
+    let posted = send(&app, Request::post("/").body(Body::empty()).unwrap()).await;
+    assert_eq!(posted.status, StatusCode::METHOD_NOT_ALLOWED);
+
+    // Unchanged: /health is public JSON.
+    let health = send(&app, get("/health")).await;
+    assert_eq!(health.status, StatusCode::OK);
+    assert_eq!(health.json()["status"], "ok");
+    assert!(health.headers.get("content-security-policy").is_none());
+}
+
+#[tokio::test]
+async fn the_page_needs_no_bearer_and_the_api_still_does() {
+    let app = mcp_http::router(keyed_config(None));
+    for path in ["/", "/app.css", "/app.js"] {
+        assert_eq!(send(&app, get(path)).await.status, StatusCode::OK, "{path}");
+    }
+    let anonymous = send(&app, calc("describe", None, None, &json!({}))).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(anonymous.json()["error"]["code"], "UNAUTHORIZED");
+    let keyed = send(&app, calc("describe", Some(SECRET), None, &json!({}))).await;
+    assert_eq!(keyed.status, StatusCode::OK);
+    assert_eq!(keyed.json()["status"], "calculated");
+}
+
+#[tokio::test]
+async fn api_responses_are_never_cached_or_sniffed() {
+    let app = mcp_http::router(keyed_config(None));
+    let keyed = send(&app, calc("describe", Some(SECRET), None, &json!({}))).await;
+    assert_eq!(keyed.status, StatusCode::OK);
+    assert!(keyed.header("content-type").starts_with("application/json"));
+    assert_eq!(keyed.header("cache-control"), "no-store");
+    assert_eq!(keyed.header("x-content-type-options"), "nosniff");
+    // The refusal before the handler carries them too.
+    let anonymous = send(&app, calc("describe", None, None, &json!({}))).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(anonymous.header("cache-control"), "no-store");
+    assert_eq!(anonymous.header("x-content-type-options"), "nosniff");
+    assert!(anonymous.headers.get("www-authenticate").is_some());
+}
+
+#[tokio::test]
+async fn the_page_is_not_part_of_the_api_contract() {
+    let app = mcp_http::router(keyed_config(None));
+    let document = send(&app, get("/openapi.json")).await.json();
+    let paths = document["paths"].as_object().unwrap();
+    for path in ["/", "/app.css", "/app.js"] {
+        assert!(!paths.contains_key(path), "{path} is in /openapi.json");
+    }
+    assert_eq!(document, mcp_http::openapi(PUBLIC_URL));
+}
+
+#[tokio::test]
+async fn the_servers_own_origin_is_allowed_implicitly() {
+    // Public URL origin, with no --allow-origin at all.
+    let app = mcp_http::router(keyed_config(None));
+    for (origin, expected) in [
+        (PUBLIC_URL, StatusCode::OK),
+        ("HTTPS://BOXSCORE.EXAMPLE.TEST:443", StatusCode::OK),
+        ("https://evil.example", StatusCode::FORBIDDEN),
+        ("http://boxscore.example.test", StatusCode::FORBIDDEN),
+        ("https://boxscore.example.test:8443", StatusCode::FORBIDDEN),
+        (
+            "https://boxscore.example.test.evil.example",
+            StatusCode::FORBIDDEN,
+        ),
+        ("http://127.0.0.1:3819", StatusCode::FORBIDDEN),
+        ("null", StatusCode::FORBIDDEN),
+    ] {
+        let reply = send(
+            &app,
+            calc("describe", Some(SECRET), Some(origin), &json!({})),
+        )
+        .await;
+        assert_eq!(reply.status, expected, "{origin}");
+        if expected == StatusCode::FORBIDDEN {
+            assert_eq!(reply.json()["error"]["code"], "ORIGIN_NOT_ALLOWED");
+        }
+    }
+
+    // A public URL behind a path prefix still has its origin.
+    let prefixed = mcp_http::router(Config {
+        public_url: format!("{PUBLIC_URL}/boxscore"),
+        ..keyed_config(None)
+    });
+    let reply = send(
+        &prefixed,
+        calc("describe", Some(SECRET), Some(PUBLIC_URL), &json!({})),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK);
+
+    // --allow-origin keeps working alongside.
+    let allowed = mcp_http::router(Config {
+        allowed_origins: vec!["https://claude.ai".into()],
+        ..keyed_config(None)
+    });
+    for origin in ["https://claude.ai", PUBLIC_URL] {
+        let reply = send(
+            &allowed,
+            calc("describe", Some(SECRET), Some(origin), &json!({})),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{origin}");
+    }
+
+    // A loopback bind: the three loopback spellings of the bound port.
+    let local = mcp_http::router(loopback_config(3819));
+    for (origin, expected) in [
+        ("http://127.0.0.1:3819", StatusCode::OK),
+        ("http://localhost:3819", StatusCode::OK),
+        ("http://[::1]:3819", StatusCode::OK),
+        ("http://127.0.0.1:3820", StatusCode::FORBIDDEN),
+        ("https://127.0.0.1:3819", StatusCode::FORBIDDEN),
+        ("http://localhost.evil.example:3819", StatusCode::FORBIDDEN),
+        ("https://claude.ai", StatusCode::FORBIDDEN),
+    ] {
+        let reply = send(&local, calc("describe", None, Some(origin), &json!({}))).await;
+        assert_eq!(reply.status, expected, "{origin}");
+    }
+
+    // A loopback bind behind a proxy: the public origin and the bound port.
+    let proxied = mcp_http::Config {
+        public_url: PUBLIC_URL.into(),
+        loopback_port: Some(4000),
+        ..keyed_config(None)
+    };
+    let origins = mcp_http::same_origins(&proxied);
+    assert_eq!(
+        origins,
+        [
+            PUBLIC_URL,
+            "http://127.0.0.1:4000",
+            "http://localhost:4000",
+            "http://[::1]:4000"
+        ]
+    );
+    // An unbound port 0 adds nothing.
+    let unbound = Config {
+        loopback_port: Some(0),
+        ..keyed_config(None)
+    };
+    assert_eq!(mcp_http::same_origins(&unbound), [PUBLIC_URL]);
+}
+
+/// The same-origin entries are stored in the canonical form the request side
+/// compares: the public URL's scheme for its loopback spellings, and no
+/// default port.
+#[tokio::test]
+async fn loopback_public_urls_keep_their_scheme_and_default_port() {
+    async fn statuses(public_url: &str, origins: &[&str]) -> Vec<StatusCode> {
+        // A non-loopback bind, so only the public URL contributes.
+        let app = mcp_http::router(Config {
+            public_url: public_url.into(),
+            ..keyed_config(None)
+        });
+        let mut found = Vec::new();
+        for origin in origins {
+            let reply = send(
+                &app,
+                calc("describe", Some(SECRET), Some(origin), &json!({})),
+            )
+            .await;
+            found.push(reply.status);
+        }
+        found
+    }
+    let (ok, forbidden) = (StatusCode::OK, StatusCode::FORBIDDEN);
+
+    // `--public-url http://localhost`: port 80, which a browser omits.
+    assert_eq!(
+        statuses(
+            "http://localhost",
+            &[
+                "http://localhost",
+                "http://127.0.0.1",
+                "http://[::1]",
+                "http://127.0.0.1:80",
+                "https://127.0.0.1",
+                "http://127.0.0.1:8080",
+            ]
+        )
+        .await,
+        [ok, ok, ok, ok, forbidden, forbidden]
+    );
+    assert_eq!(
+        mcp_http::same_origins(&Config {
+            public_url: "http://localhost".into(),
+            ..keyed_config(None)
+        }),
+        ["http://localhost", "http://127.0.0.1", "http://[::1]"]
+    );
+
+    // A local TLS proxy: the loopback spellings are https on its port.
+    assert_eq!(
+        statuses(
+            "https://localhost:8443",
+            &[
+                "https://localhost:8443",
+                "https://127.0.0.1:8443",
+                "https://[::1]:8443",
+                "http://127.0.0.1:8443",
+                "http://localhost:8443",
+            ]
+        )
+        .await,
+        [ok, ok, ok, forbidden, forbidden]
+    );
+
+    // `https://localhost` drops 443 the same way.
+    assert_eq!(
+        mcp_http::same_origins(&Config {
+            public_url: "https://localhost".into(),
+            ..keyed_config(None)
+        }),
+        ["https://localhost", "https://127.0.0.1", "https://[::1]"]
+    );
+
+    // Through prepare, as the command line sets it: the public URL's https
+    // spellings, and the plain-http spellings of the loopback listener.
+    let (_, config) = mcp_http::prepare(&ServeOptions {
+        public_url: Some("https://localhost:8443".into()),
+        ..ServeOptions::default()
+    })
+    .unwrap();
+    assert_eq!(
+        mcp_http::same_origins(&config),
+        [
+            "https://localhost:8443",
+            "https://127.0.0.1:8443",
+            "https://[::1]:8443",
+            "http://127.0.0.1:3819",
+            "http://localhost:3819",
+            "http://[::1]:3819"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn prepare_records_a_loopback_bind() {
+    let (_, config) = mcp_http::prepare(&ServeOptions::default()).unwrap();
+    assert_eq!(config.loopback_port, Some(3819));
+    assert!(mcp_http::same_origins(&config).contains(&"http://localhost:3819".to_string()));
+
+    let dir = tempfile::tempdir().unwrap();
+    let keys = dir.path().join("keys");
+    std::fs::write(&keys, format!("ci:{SECRET}\n")).unwrap();
+    set_private(&keys);
+    let (_, exposed) = mcp_http::prepare(&ServeOptions {
+        bind: "0.0.0.0:3819".into(),
+        api_key_file: Some(keys),
+        ..ServeOptions::default()
+    })
+    .unwrap();
+    assert_eq!(exposed.loopback_port, None);
+    // The default public URL is still the server's own origin.
+    assert_eq!(
+        mcp_http::same_origins(&exposed),
+        [
+            "http://127.0.0.1:3819",
+            "http://localhost:3819",
+            "http://[::1]:3819"
+        ]
+    );
+}
+
+fn set_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+fn source(name: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/exact/workbench")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// Every `on<letters>` followed by optional spaces and `=` (not `==`) right
+/// after a character in `before`: an inline handler attribute in HTML
+/// (`<a onclick=`) or a handler property in script (`node.onclick =`).
+fn handler_assignments(text: &str, before: &[u8]) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    for i in 1..bytes.len().saturating_sub(1) {
+        if !before.contains(&bytes[i - 1])
+            || !bytes[i].eq_ignore_ascii_case(&b'o')
+            || !bytes[i + 1].eq_ignore_ascii_case(&b'n')
+        {
+            continue;
+        }
+        let mut j = i + 2;
+        while j < bytes.len() && bytes[j].is_ascii_alphabetic() {
+            j += 1;
+        }
+        if j == i + 2 {
+            continue;
+        }
+        let mut k = j;
+        while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+            k += 1;
+        }
+        if bytes.get(k) == Some(&b'=') && bytes.get(k + 1) != Some(&b'=') {
+            found.push(String::from_utf8_lossy(&bytes[i - 1..=k]).into_owned());
+        }
+    }
+    found
+}
+
+#[test]
+fn page_sources_build_the_dom_without_markup_or_external_urls() {
+    let html = source("index.html");
+    let js = source("app.js");
+    let css = source("app.css");
+    assert_eq!(html, workbench::INDEX_HTML);
+    assert_eq!(js, workbench::APP_JS);
+    assert_eq!(css, workbench::APP_CSS);
+
+    for (name, text) in [("index.html", &html), ("app.js", &js), ("app.css", &css)] {
+        let lower = text.to_ascii_lowercase();
+        for banned in [
+            "innerhtml",
+            "outerhtml",
+            "insertadjacenthtml",
+            "eval(",
+            "new function",
+            "document.write",
+            "http://",
+            "https://",
+            "javascript:",
+            "@import",
+            "url(",
+        ] {
+            assert!(!lower.contains(banned), "{name} contains {banned}");
+        }
+    }
+
+    // index.html: one script tag, the external one; no inline style or handler.
+    let lower = html.to_ascii_lowercase();
+    assert_eq!(lower.matches("<script").count(), 1);
+    assert!(html.contains(r#"<script src="app.js" defer></script>"#));
+
+    // Every URL is relative, so a server behind a path prefix
+    // (`--public-url https://host/boxscore`) serves and calls itself there.
+    for root_absolute in ["href=\"/", "src=\"/", "href='/", "src='/"] {
+        assert!(
+            !lower.contains(root_absolute),
+            "index.html contains {root_absolute}"
+        );
+    }
+    for root_absolute in ["\"/v1/", "'/v1/", "\"/.well-known", "'/.well-known"] {
+        assert!(
+            !js.contains(root_absolute),
+            "app.js contains {root_absolute}"
+        );
+    }
+    assert!(js.contains(r#"request("POST", "v1/calc/" + name, input)"#));
+    assert!(js.contains(r#"request("GET", ".well-known/oauth-protected-resource")"#));
+
+    // A pasted key is checked before it is stored: printable ASCII only.
+    assert!(js.contains(r"var KEY_CHARS = /^[\x21-\x7e]+$/;"));
+    assert!(js.contains("The key contains characters an API key cannot have"));
+    assert!(!lower.contains("<style"));
+    assert!(!lower.contains(" style="));
+    assert_eq!(
+        handler_assignments(&html, b" \t\r\n\"'/"),
+        Vec::<String>::new()
+    );
+
+    // app.js: handlers only through addEventListener; no markup sink, no
+    // string-evaluating timer.
+    assert_eq!(handler_assignments(&js, b"."), Vec::<String>::new());
+    for banned in [
+        "setattribute(\"on",
+        "setattribute('on",
+        "settimeout(\"",
+        "settimeout('",
+        "setinterval(\"",
+        "setinterval('",
+        "parsefloat",
+        "number(",
+        "domparser",
+        "createcontextualfragment",
+        "srcdoc",
+        "localstorage",
+        "document.cookie",
+    ] {
+        assert!(
+            !js.to_ascii_lowercase().contains(banned),
+            "app.js contains {banned}"
+        );
+    }
+    assert!(js.contains("sessionStorage"));
+
+    // The scanner itself finds what it should.
+    assert_eq!(
+        handler_assignments(r#"<img src=x onerror=alert(1)><a ONCLICK = "x">"#, b" "),
+        [" onerror=", " ONCLICK ="]
+    );
+    assert_eq!(
+        handler_assignments("node.onclick = f; a.one == b; x.on = 1", b"."),
+        [".onclick ="]
+    );
+
+    // Under 40 KB together.
+    assert!(html.len() + js.len() + css.len() < 40 * 1024);
+}
+
+/// The page labels each account's class from its category; its list of
+/// revenue categories must be the engine's.
+#[test]
+fn page_revenue_categories_match_the_engine() {
+    let js = source("app.js");
+    let start = js
+        .find("var REVENUE_CATEGORIES = [")
+        .expect("REVENUE_CATEGORIES in app.js");
+    let list = &js[start..];
+    let list = &list[list.find('[').unwrap() + 1..list.find(']').unwrap()];
+    let categories: Vec<&str> = list
+        .split(',')
+        .map(|c| c.trim().trim_matches('"'))
+        .collect();
+    assert_eq!(categories.len(), 4, "{categories:?}");
+    for category in &categories {
+        assert_eq!(account_class(category), AccountClass::Revenue, "{category}");
+    }
+    assert!(js.contains(r#"if (c === "unmapped") return "unmapped";"#));
+    // The page classifies the returned category as it is: the engine has
+    // normalized it already, and JavaScript's trim() strips characters
+    // Rust's keeps (U+FEFF), so a second normalization would disagree.
+    let class_of = &js[js.find("function classOf(category) {").unwrap()..];
+    let class_of = &class_of[..class_of.find("\n  }").unwrap()];
+    assert!(class_of.contains("var c = text(category);"), "{class_of}");
+    assert!(!class_of.contains("trim"), "{class_of}");
+    assert!(
+        !class_of.to_ascii_lowercase().contains("case"),
+        "{class_of}"
+    );
+    assert_eq!(account_class("unmapped"), AccountClass::Unmapped);
+    for expense in [
+        "payroll",
+        "utilities",
+        "repairs and maintenance",
+        "insurance",
+    ] {
+        assert_eq!(account_class(expense), AccountClass::Expense);
+        assert!(!categories.contains(&expense));
+    }
+}
+
+fn row(code: &str, name: &str, category: &str, amount: &str) -> Value {
+    json!({"account_code": code, "account_name": name, "category": category, "amount": amount})
+}
+
+#[tokio::test]
+async fn hostile_account_names_come_back_as_plain_json_strings() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("exact.sqlite");
+    let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args(["init", "--database", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(init.status.code(), Some(0));
+    let app = mcp_http::router(Config {
+        database: Some(db),
+        ..loopback_config(3819)
+    });
+    let origin = Some("http://127.0.0.1:3819");
+
+    let dataset = json!({
+        "property": "Synthetic <b>Elm</b>", "period": "2026-05",
+        "currency": "USD", "expense_convention": "positive_costs", "unit_count": 10,
+        "actuals": [row("4000", HOSTILE_NAME, "rental income", "1234567.89"),
+                    row("5000", HOSTILE_SCRIPT, "payroll", "30.00")],
+        "budgets": [row("4000", HOSTILE_NAME, "rental income", "1200000.00"),
+                    row("5000", HOSTILE_SCRIPT, "payroll", "25.00")],
+        "snapshot": null
+    });
+    let imported = send(
+        &app,
+        calc("import_period", None, origin, &json!({"dataset": dataset})),
+    )
+    .await;
+    assert_eq!(imported.status, StatusCode::OK, "{}", imported.json());
+    let revision = imported.json()["result"]["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let listed = send(&app, calc("list_revisions", None, origin, &json!({}))).await;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(
+        listed.json()["result"]["revisions"][0]["property"],
+        "Synthetic <b>Elm</b>"
+    );
+
+    let reviewed = send(
+        &app,
+        calc(
+            "review_period",
+            None,
+            origin,
+            &json!({"revision_id": revision}),
+        ),
+    )
+    .await;
+    assert_eq!(reviewed.status, StatusCode::OK);
+    assert!(reviewed
+        .header("content-type")
+        .starts_with("application/json"));
+    let envelope = reviewed.json();
+    assert_eq!(envelope["status"], "review_required");
+    let accounts = envelope["result"]["variance"]["by_account"]
+        .as_array()
+        .unwrap();
+    assert_eq!(accounts[0]["account_name"], HOSTILE_NAME);
+    assert_eq!(accounts[1]["account_name"], HOSTILE_SCRIPT);
+    // Money stays a string; the page only regroups its digits.
+    assert_eq!(accounts[0]["variance"], "34567.89");
+    assert_eq!(
+        envelope["result"]["variance"]["noi_bridge"]["noi_variance"],
+        "34562.89"
+    );
+    // On the wire the names are JSON strings: the markup is quoted, the
+    // control characters escaped.
+    let raw = String::from_utf8(reviewed.body.clone()).unwrap();
+    assert!(raw.contains(&format!("\"account_name\":\"{HOSTILE_NAME}\"")));
+    assert!(raw.contains(r#"\u0007\u001b[31m"#));
+    assert!(!raw.contains('\u{7}'));
+}
+
+/// Class parity, the engine's side: Rust's trim keeps U+FEFF, so a category
+/// of "\u{FEFF}rental income" is not revenue to the engine. It comes back with
+/// the mark, and the page classifies that returned string without trimming
+/// it again (see `classOf` in app.js), so both call it an expense.
+#[tokio::test]
+async fn a_byte_order_mark_keeps_a_category_out_of_revenue() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("exact.sqlite");
+    let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args(["init", "--database", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(init.status.code(), Some(0));
+    let app = mcp_http::router(Config {
+        database: Some(db),
+        ..loopback_config(3819)
+    });
+    let marked = "\u{FEFF}rental income";
+    let dataset = json!({
+        "property": "Synthetic Birch", "period": "2026-05",
+        "currency": "USD", "expense_convention": "positive_costs", "unit_count": 10,
+        "actuals": [row("4000", "Rent", "rental income", "1000.00"),
+                    row("4100", "Marked rent", marked, "300.00"),
+                    row("5000", "Payroll", "payroll", "100.00")],
+        "budgets": [row("4000", "Rent", "rental income", "900.00"),
+                    row("4100", "Marked rent", marked, "200.00"),
+                    row("5000", "Payroll", "payroll", "100.00")],
+        "snapshot": null
+    });
+    let imported = send(
+        &app,
+        calc("import_period", None, None, &json!({"dataset": dataset})),
+    )
+    .await;
+    assert_eq!(imported.status, StatusCode::OK, "{}", imported.json());
+    let revision = imported.json()["result"]["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let reviewed = send(
+        &app,
+        calc(
+            "review_period",
+            None,
+            None,
+            &json!({"revision_id": revision}),
+        ),
+    )
+    .await;
+    assert_eq!(reviewed.status, StatusCode::OK, "{}", reviewed.json());
+    let envelope = reviewed.json();
+    let variance = &envelope["result"]["variance"];
+    // The returned category still carries the mark.
+    let account = variance["by_account"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_code"] == "4100")
+        .unwrap();
+    assert_eq!(account["category"], marked);
+    assert_eq!(account_class(marked), AccountClass::Expense);
+    // Revenue is the unmarked account alone; the marked one moved expenses.
+    let bridge = &variance["noi_bridge"];
+    assert_eq!(bridge["actual_revenue"], "1000.00");
+    assert_eq!(bridge["revenue_variance"], "100.00");
+    assert_eq!(bridge["actual_expenses"], "400.00");
+    assert_eq!(bridge["expense_variance"], "100.00");
+    assert_eq!(bridge["noi_variance"], "0.00");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn serve_announces_the_workbench_and_allows_its_own_origin() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args(["serve", "--bind", "127.0.0.1:0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut listening = String::new();
+    stderr.read_line(&mut listening).unwrap();
+    let mut announced = String::new();
+    stderr.read_line(&mut announced).unwrap();
+    let base = listening
+        .split_whitespace()
+        .find(|w| w.starts_with("http://127.0.0.1:"))
+        .unwrap_or_else(|| panic!("no address in {listening:?}"))
+        .to_string();
+    assert_eq!(
+        announced.trim_end(),
+        format!("boxscore-exact serve: workbench at {base}/")
+    );
+    let port = base.rsplit(':').next().unwrap().to_string();
+
+    let client = reqwest::Client::new();
+    let page = client.get(format!("{base}/")).send().await.unwrap();
+    assert_eq!(page.status().as_u16(), 200);
+    assert_eq!(page.headers()["content-security-policy"], CSP);
+    for (origin, expected) in [
+        (base.clone(), 200),
+        (format!("http://localhost:{port}"), 200),
+        ("http://127.0.0.1:1".to_string(), 403),
+    ] {
+        let reply = client
+            .post(format!("{base}/v1/calc/describe"))
+            .header("origin", &origin)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status().as_u16(), expected, "{origin}");
+    }
+
+    let killed = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("server did not stop on SIGTERM");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}

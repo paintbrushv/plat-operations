@@ -15,6 +15,7 @@ envelope, `result` and `output_sha256` on both transports.
 | `GET /health` | none | `{"status":"ok","producer":{...}}` |
 | `GET /.well-known/oauth-protected-resource` | none | RFC 9728 protected-resource metadata, `resource` = the public URL |
 | `GET /.well-known/oauth-protected-resource/mcp` | none | the same document with `resource` = `<public-url>/mcp` |
+| `GET /`, `/app.css`, `/app.js` | none | the read-only browser workbench; its data calls use `/v1/calc` with a bearer API key. Not in the OpenAPI contract. See [INSTALL.md](../INSTALL.md#browser-workbench) |
 
 "bearer" means `Authorization: Bearer <token>`, where the token is an API key
 (for scripts) or an OAuth 2.1 access token (for claude.ai and ChatGPT
@@ -625,11 +626,15 @@ delete `kc-test.sqlite` and `kc-client-secret`.
 
 ## Origin allowlist (DNS rebinding)
 
-A request with an `Origin` header passes only when that origin matches an
-`--allow-origin` value. Matching uses scheme, host and port, ignores case and
-drops default ports. Anything else gets `403`, on every route and before
-authentication. The default allowlist is empty, so no browser page can call
-the server. Server-side clients send no `Origin` and are not affected; the
+A request with an `Origin` header passes only when that origin is the
+server's own or matches an `--allow-origin` value. The server's own origins
+are the origin of `--public-url` and, when the public URL or the bind address
+is loopback, `http://127.0.0.1:<port>`, `http://localhost:<port>` and
+`http://[::1]:<port>`; they let the workbench page served at `/` call the
+API. Matching uses scheme, host and port, ignores case and drops default
+ports. Anything else gets `403`, on every route and before authentication.
+The default allowlist is empty, so no page from another origin can call the
+server. Server-side clients send no `Origin` and are not affected; the
 claude.ai and ChatGPT connectors call from the vendors' servers, not from
 the browser. Add an origin only for a browser-based MCP client you run
 yourself. Each value must be `scheme://host[:port]` with no path.

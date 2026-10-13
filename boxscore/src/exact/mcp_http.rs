@@ -11,6 +11,10 @@
 //!   body as its input and returns the envelope (200, or 422 when refused).
 //! - `GET /health`, `GET /openapi.json` and
 //!   `GET /.well-known/oauth-protected-resource` (RFC 9728) are public.
+//! - `GET /`, `GET /app.css` and `GET /app.js` serve the read-only browser
+//!   workbench ([`super::workbench`]), also public: the page itself holds no
+//!   data, and the `/v1/calc` calls it makes are authenticated like any
+//!   other. It is not part of `/openapi.json`.
 //!
 //! Everything else needs `Authorization: Bearer <token>`, checked by a
 //! [`TokenValidator`]: [`StaticKeys`] (API keys for scripts) and, for
@@ -20,9 +24,13 @@
 //! keys are tried first ([`ValidatorChain`]). A server without a validator
 //! answers loopback only: [`prepare`] refuses to bind anything else.
 //!
+//! A request carrying `Origin` must name an allowed origin: one passed with
+//! `--allow-origin`, or the server's own origin, so the workbench page can
+//! call the API it was served with (see [`same_origins`]).
+//!
 //! The database path comes from the command line, never from a request. The
 //! server writes no artifacts and logs no request content, token or principal.
-use super::{catalog, digest, mcp, oauth, protocol::MAX_REQUEST_BYTES};
+use super::{catalog, digest, mcp, oauth, protocol::MAX_REQUEST_BYTES, workbench};
 use axum::{
     body::Bytes,
     extract::{rejection::BytesRejection, DefaultBodyLimit, Path, Query, Request, State},
@@ -414,7 +422,8 @@ pub struct Config {
     /// `None` only for a loopback server started without `--api-key-file`
     /// or OAuth.
     pub validator: Option<Arc<dyn TokenValidator>>,
-    /// Serialized origins (`scheme://host[:port]`) allowed to send `Origin`.
+    /// Serialized origins (`scheme://host[:port]`) allowed to send `Origin`,
+    /// besides the server's own ([`same_origins`]).
     pub allowed_origins: Vec<String>,
     /// The resource identifier, without a trailing slash.
     pub public_url: String,
@@ -427,6 +436,10 @@ pub struct Config {
     /// OAuth access-token validation is configured: the OpenAPI document
     /// then advertises the `oauth2` security scheme.
     pub oauth_enabled: bool,
+    /// The bound port when the bind address is loopback, `None` otherwise.
+    /// The page served at `http://127.0.0.1:<port>/`, `http://localhost:<port>/`
+    /// or `http://[::1]:<port>/` is then the server's own origin.
+    pub loopback_port: Option<u16>,
 }
 
 impl std::fmt::Debug for Config {
@@ -440,6 +453,7 @@ impl std::fmt::Debug for Config {
             .field("rate_limit_per_minute", &self.rate_limit_per_minute)
             .field("scope", &self.scope)
             .field("oauth_enabled", &self.oauth_enabled)
+            .field("loopback_port", &self.loopback_port)
             .finish()
     }
 }
@@ -625,6 +639,8 @@ pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartErro
             rate_limit_per_minute: options.rate_limit,
             scope,
             oauth_enabled: oauth.is_some(),
+            // Port 0 is replaced by the bound port in `serve`.
+            loopback_port: addr.ip().is_loopback().then_some(addr.port()),
         },
     ))
 }
@@ -658,6 +674,8 @@ async fn with_introspection_endpoint(options: &ServeOptions) -> Result<ServeOpti
 
 struct AppState {
     config: Config,
+    /// The server's own origins, allowed without `--allow-origin`.
+    same_origins: Vec<String>,
     mcp: mcp::Server,
     limiter: RateLimiter,
     openapi: Value,
@@ -677,6 +695,7 @@ pub fn router(config: Config) -> Router {
         ),
         metadata: protected_resource_metadata(&config, &config.public_url),
         metadata_mcp: protected_resource_metadata(&config, &format!("{}/mcp", config.public_url)),
+        same_origins: same_origins(&config),
         config,
     });
     let protected = Router::new()
@@ -685,17 +704,34 @@ pub fn router(config: Config) -> Router {
             post(mcp_post).get(mcp_not_allowed).delete(mcp_not_allowed),
         )
         .route("/v1/calc/:function", post(calc))
-        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
+        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate))
+        .layer(middleware::from_fn(api_headers));
     Router::new()
         .route("/health", get(health))
         .route("/openapi.json", get(openapi_document))
         .route(METADATA_PATH, get(resource_metadata))
         .route(METADATA_MCP_PATH, get(resource_metadata_mcp))
+        .merge(workbench::routes())
         .merge(protected)
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), check_origin))
         .with_state(state)
+}
+
+/// `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on every
+/// `/mcp` and `/v1/calc` response, the authentication refusals included:
+/// an envelope is never cached by a browser or proxy, and never sniffed as
+/// anything but its declared JSON.
+async fn api_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 fn error_body(status: StatusCode, code: &str, message: &str) -> Response {
@@ -714,8 +750,72 @@ fn rpc_error(status: StatusCode, code: i64, message: &str) -> Response {
         .into_response()
 }
 
+/// The origin (`scheme://host[:port]`) of an absolute http(s) URL; unlike
+/// [`normalize_origin`], the URL may carry a path.
+fn origin_of(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let origin = url.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
+}
+
+/// The `127.0.0.1`, `localhost` and `[::1]` origins for `scheme` and `port`,
+/// in [`normalize_origin`]'s canonical form (a default port is dropped), so
+/// they compare equal to the `Origin` a browser sends.
+fn loopback_origins(scheme: &str, port: u16) -> Vec<String> {
+    ["127.0.0.1", "localhost", "[::1]"]
+        .iter()
+        .filter_map(|host| normalize_origin(&format!("{scheme}://{host}:{port}")))
+        .collect()
+}
+
+/// The server's own origins, which a browser names in `Origin` when the
+/// workbench page calls the API it was served with: the origin of
+/// `public_url`; when that is a loopback URL, also its `127.0.0.1`,
+/// `localhost` and `[::1]` spellings on the same port; and when the bind
+/// address is loopback, those three on the bound port. Every one of them is
+/// this server or the host's loopback interface, so allowing them opens
+/// nothing to another site; `--allow-origin` governs everything else.
+///
+/// The public URL's loopback spellings keep its scheme (`https` behind a
+/// local TLS proxy); the bound-port spellings are `http`, because the
+/// listener speaks plain HTTP. Every entry is in [`normalize_origin`]'s
+/// canonical form, the form [`check_origin`] compares, so a default port
+/// (`http://localhost`) is stored without `:80`.
+pub fn same_origins(config: &Config) -> Vec<String> {
+    let mut origins = Vec::new();
+    let mut push = |origin: String| {
+        if let Some(origin) = normalize_origin(&origin) {
+            if !origins.contains(&origin) {
+                origins.push(origin);
+            }
+        }
+    };
+    if let Some(origin) = origin_of(&config.public_url) {
+        push(origin);
+    }
+    if is_loopback_url(&config.public_url) {
+        if let Ok(url) = reqwest::Url::parse(&config.public_url) {
+            if let Some(port) = url.port_or_known_default() {
+                loopback_origins(url.scheme(), port)
+                    .into_iter()
+                    .for_each(&mut push);
+            }
+        }
+    }
+    if let Some(port) = config.loopback_port.filter(|port| *port != 0) {
+        loopback_origins("http", port)
+            .into_iter()
+            .for_each(&mut push);
+    }
+    origins
+}
+
 /// Block DNS rebinding: a request carrying `Origin` must name an allowed
-/// origin. Non-browser clients send none and pass.
+/// origin ([`Config::allowed_origins`] or the server's own,
+/// [`same_origins`]). Non-browser clients send none and pass.
 async fn check_origin(
     State(state): State<Arc<AppState>>,
     request: Request,
@@ -726,7 +826,9 @@ async fn check_origin(
             .to_str()
             .ok()
             .and_then(normalize_origin)
-            .is_some_and(|o| state.config.allowed_origins.contains(&o));
+            .is_some_and(|o| {
+                state.config.allowed_origins.contains(&o) || state.same_origins.contains(&o)
+            });
         if !allowed {
             return error_body(
                 StatusCode::FORBIDDEN,
@@ -1447,6 +1549,9 @@ pub async fn serve(
     if options.public_url.is_none() {
         config.public_url = public_url_or_default(None, local.port())?;
     }
+    if config.loopback_port.is_some() {
+        config.loopback_port = Some(local.port());
+    }
     let auth = match (options.api_key_file.is_some(), oauth.is_some()) {
         (true, true) => "bearer API keys, then OAuth introspection",
         (true, false) => "bearer API keys",
@@ -1454,6 +1559,7 @@ pub async fn serve(
         (false, false) => "none (loopback only)",
     };
     eprintln!("boxscore-exact serve: listening on http://{local} (auth: {auth})");
+    eprintln!("boxscore-exact serve: workbench at {}/", config.public_url);
     if let Some(oauth) = &oauth {
         // Identifiers only; the client secret is never printed.
         let endpoint = oauth
