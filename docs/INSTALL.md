@@ -227,7 +227,7 @@ Before connecting a remote assistant, read
 
 ### Browser workbench
 
-`serve` also offers a small read-only page for analysts without an agent
+`serve` also offers a small page for analysts without an agent
 connection. Open the server's public URL with a trailing slash in a browser
 (`http://127.0.0.1:3819/` with the command above), paste an API key when the
 page asks for one (it is kept in that tab's session storage only), and pick
@@ -236,9 +236,41 @@ NOI bridge, every account, excluded and unmapped accounts, and the citation
 line with a Copy button. A loopback server started without a key file asks
 for no key.
 
-This first slice is read-only: importing, corrections and issuing reports
-are not available from the page yet. Signing in with OAuth from the browser
-is not supported in this slice; use an API key, or the agent connectors.
+Two more screens sit around the list. **Load a period** is built from the
+server's own list of source adapters (`describe`): choose a profile, choose
+a file for each file it names (required ones are marked, with the expected
+shape beside each), and fill in its options (for `canonical.csv/1`: the
+property name, the period and the unit count). The page reads the bytes of
+each file you choose and decodes them as strict UTF-8, keeping a leading
+byte order mark if the file has one, and sends that text to the server in
+the body of the request, so the server hashes exactly the bytes on disk (its
+CSV reader skips a BOM; a JSON file with one, a snapshot say, is refused, by
+the page's import and by `import-with` alike). A file that is not UTF-8 is
+refused in the page with "<name> is not UTF-8 text. Nothing was sent." The
+page keeps no copy, and it never sees a file's path. The server runs the
+adapter, stores a revision, and the page then shows the new revision id, the
+citation line and the recorded files (name, size and SHA-256) and opens the
+new revision in the review. The page itself refuses only a missing required
+file or option, an option with leading or trailing spaces, a correction with
+no reason, and a request over the server's cap: about 2 MiB of JSON
+including escaping (each quote, backslash or line break in a file takes two
+bytes), checked first on the files' sizes and again on the request it built,
+before sending. Every other refusal is the engine's, shown with its code and
+message as it sent them. An import waits up to 60 seconds for an answer; if
+none comes, the server may already have stored the period, so reload the
+list before trying again. Tick **This is a correction** to supersede a
+revision (the id of the one under review is filled in) with a reason: the
+page then shows the property, period, the revision it supersedes and the
+reason, and sends nothing until you press **Confirm correction**. **Look up
+a trace** takes a trace id from any citation line (the Look up button beside
+a citation fills it in) and shows what the server recorded for that call:
+function and version, caller, status, input and output hashes, times, and
+the revision's recorded sources (the server's file list, up to 50 rows, and
+anything the caller sent under `sources.supplied`, shown apart as not
+verified by the server).
+
+Issuing reports is not available from the page yet. Signing in with OAuth
+from the browser is not supported; use an API key, or the agent connectors.
 The page is served from the binary on the same port, loads nothing from
 elsewhere, and is not part of `/openapi.json`. Open it at the URL the
 server prints (`workbench at ...`): the API answers the page only from the

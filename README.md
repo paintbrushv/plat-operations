@@ -66,9 +66,10 @@ output hash with every number.
 `boxscore-exact serve` serves the same calculations over HTTP (MCP at `/mcp`,
 `POST /v1/calc/{function}`, an OpenAPI contract); see
 [docs/connectors/remote-mcp.md](docs/connectors/remote-mcp.md).
-It also serves a read-only browser workbench at `/` for analysts without an
-agent connection: list what is loaded and review a period, with the
-citation; no import, correction or issuing from the page yet, and API keys
+It also serves a browser workbench at `/` for analysts without an
+agent connection: load a period from files you choose (and correct one),
+list what is loaded, review a period with its citation, and look up a
+trace; no issuing from the page yet, and API keys
 only, no OAuth sign-in from the browser
 ([INSTALL.md](docs/INSTALL.md#browser-workbench)). Scripts and
 Claude Code use API keys. The claude.ai and ChatGPT remote connectors sign in
