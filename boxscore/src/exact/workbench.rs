@@ -3,7 +3,7 @@
 //! no network beyond the server itself (the image runs with `--network none`
 //! everywhere but `serve`).
 //!
-//! The page is a thin, read-only view over the authenticated `/v1/calc`
+//! The page is a thin view over the authenticated `/v1/calc`
 //! routes: it never computes a figure, it shows the strings the envelopes
 //! carry. Loading the page needs no bearer token; every data call it makes
 //! goes through the same authentication, origin check and rate limit as any

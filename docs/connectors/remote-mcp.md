@@ -15,7 +15,7 @@ envelope, `result` and `output_sha256` on both transports.
 | `GET /health` | none | `{"status":"ok","producer":{...}}` |
 | `GET /.well-known/oauth-protected-resource` | none | RFC 9728 protected-resource metadata, `resource` = the public URL |
 | `GET /.well-known/oauth-protected-resource/mcp` | none | the same document with `resource` = `<public-url>/mcp` |
-| `GET /`, `/app.css`, `/app.js` | none | the read-only browser workbench; its data calls use `/v1/calc` with a bearer API key. Not in the OpenAPI contract. See [INSTALL.md](../INSTALL.md#browser-workbench) |
+| `GET /`, `/app.css`, `/app.js` | none | the browser workbench; its data calls use `/v1/calc` with a bearer API key. Not in the OpenAPI contract. See [INSTALL.md](../INSTALL.md#browser-workbench) |
 
 "bearer" means `Authorization: Bearer <token>`, where the token is an API key
 (for scripts) or an OAuth 2.1 access token (for claude.ai and ChatGPT

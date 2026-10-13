@@ -31,6 +31,46 @@
     </form>
   </section>
 
+  <section id="import-panel" class="panel" aria-labelledby="import-h">
+    <h2 id="import-h">Load a period</h2>
+    <p>Choose the files for one property and month. This page reads each file you choose and sends its text to this server in the request body; it keeps nothing, and the server stores a revision with each file's hash. The form below comes from the server's list of source adapters.</p>
+    <form id="import-form" novalidate>
+      <fieldset id="import-lock">
+      <div class="field">
+        <label for="import-profile">Source profile</label>
+        <select id="import-profile" disabled></select>
+        <p id="import-summary" class="note"></p>
+      </div>
+      <div id="import-fields"></div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="import-correction"> This is a correction</label>
+      </div>
+      <div id="import-correction-fields" hidden>
+        <div class="field">
+          <label for="import-supersedes">Revision id it supersedes (required)</label>
+          <input id="import-supersedes" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" aria-required="true">
+        </div>
+        <div class="field">
+          <label for="import-reason">Reason (required)</label>
+          <input id="import-reason" type="text" autocomplete="off" aria-required="true">
+        </div>
+      </div>
+      <div class="inline-form">
+        <button type="submit" id="import-submit">Load period</button>
+      </div>
+      </fieldset>
+    </form>
+    <div id="import-confirm" class="confirm" role="group" aria-labelledby="import-confirm-h" hidden>
+      <h3 id="import-confirm-h" tabindex="-1">Confirm correction</h3>
+      <div id="import-confirm-body"></div>
+      <div class="inline-form">
+        <button type="button" id="import-confirm-yes">Confirm correction</button>
+        <button type="button" id="import-confirm-no">Cancel</button>
+      </div>
+    </div>
+    <div id="import-result"></div>
+  </section>
+
   <section id="loaded" class="panel" aria-labelledby="loaded-h">
     <div class="section-head">
       <h2 id="loaded-h">Loaded data</h2>
@@ -48,9 +88,20 @@
     <h2 id="review-h" tabindex="-1">Review</h2>
     <div id="review-body"></div>
   </section>
+
+  <section id="trace-panel" class="panel" aria-labelledby="trace-h">
+    <h2 id="trace-h" tabindex="-1">Look up a trace</h2>
+    <p>A trace id comes from a citation line. The server returns what it recorded for that call.</p>
+    <form id="trace-form" class="inline-form" novalidate>
+      <label for="trace-input">Trace id</label>
+      <input id="trace-input" type="text" autocomplete="off" spellcheck="false" autocapitalize="off">
+      <button type="submit">Look up</button>
+    </form>
+    <div id="trace-body"></div>
+  </section>
 </main>
 <footer class="wrap foot">
-  <p>Read-only. Every figure here is a string returned by the engine; this page computes nothing. Importing, corrections and issuing reports are not available here yet.</p>
+  <p>Every figure here is a string returned by the engine; this page computes nothing. Files you choose are sent to this server and not kept by the page. Issuing reports is not available here yet.</p>
 </footer>
 </body>
 </html>

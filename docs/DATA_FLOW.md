@@ -230,7 +230,7 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   unless `--public-url` names it (INSTALL.md, Browser workbench). [tests:
   `boxscore/tests/exact_workbench.rs`; CI: the `serve` check calls
   `/v1/calc/describe` with its own origin and with another]
-- **Browser workbench.** `GET /` serves a read-only page (with `/app.css`
+- **Browser workbench.** `GET /` serves a page (with `/app.css`
   and `/app.js`) on the same port and origin as the API. The three files are
   compiled into the binary; the page loads nothing from anywhere else (its
   Content-Security-Policy allows this origin only) and needs no new
@@ -242,10 +242,12 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   tab, and any page served from the same origin can read it, so give the
   server an origin of its own (no path-prefix sharing with other apps). The
   `/v1/calc` and `/mcp` responses carry `Cache-Control: no-store` and
-  `X-Content-Type-Options: nosniff`. This first slice lists the stored
-  revisions and reviews one; it cannot import, correct or issue reports, and
-  it does not support OAuth sign-in (use an API key, or the agent
-  connectors). [tests:
+  `X-Content-Type-Options: nosniff`. The page lists the stored
+  revisions, reviews one and looks up a trace; it can also import a period
+  or a correction, sending the text of the files the user chooses to the
+  server over that same connection (in an `import_period` request body, 2 MiB
+  at most, never stored by the page); it cannot issue reports, and it does not
+  support OAuth sign-in (use an API key, or the agent connectors). [tests:
   `boxscore/tests/exact_workbench.rs`; CI: the `serve` check fetches `/`
   and its Content-Security-Policy]
 - It speaks plain HTTP. Terminate TLS at a reverse proxy in front of it.

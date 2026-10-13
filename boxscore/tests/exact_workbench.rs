@@ -502,7 +502,7 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
             "app.js contains {root_absolute}"
         );
     }
-    assert!(js.contains(r#"request("POST", "v1/calc/" + name, input)"#));
+    assert!(js.contains(r#"request("POST", "v1/calc/" + name, input, timeout)"#));
     assert!(js.contains(r#"request("GET", ".well-known/oauth-protected-resource")"#));
 
     // A pasted key is checked before it is stored: printable ASCII only.
@@ -550,8 +550,136 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
         [".onclick ="]
     );
 
-    // Under 40 KB together.
-    assert!(html.len() + js.len() + css.len() < 40 * 1024);
+    // The import screen reads each chosen file's bytes with
+    // FileReader.readAsArrayBuffer through listeners (a handler property
+    // would fail the scan above) and decodes them as strict UTF-8 that keeps
+    // a leading BOM, so the text sent is the file's bytes exactly; a file
+    // that is not UTF-8 is refused before anything is sent. The text is
+    // never trimmed, parsed or kept. The page asks for no path, object URL or
+    // other storage.
+    assert_eq!(js.matches(".readAsText(").count(), 0);
+    assert_eq!(js.matches(".readAsArrayBuffer(").count(), 1);
+    assert!(js.contains("reader.readAsArrayBuffer(file);"));
+    assert_eq!(js.matches("new TextDecoder(").count(), 1);
+    assert!(js.contains(
+        r#"resolve(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(reader.result));"#
+    ));
+    assert!(js.contains(r#"reject({ notUtf8: file.name });"#));
+    assert!(js.contains(r#"e.notUtf8 + " is not UTF-8 text. Nothing was sent.""#));
+    assert!(js.contains("files[p.name] = texts[i];"));
+    assert!(js.contains("var payload = { profile: c.profile, files: files, options: c.options };"));
+    // The body is measured as the server will see it, escaping included,
+    // and refused over the cap before it is sent; the file sizes are the
+    // first gate, before any file is read.
+    assert!(js.contains("var size = new TextEncoder().encode(JSON.stringify(payload)).length;"));
+    assert!(js.contains("if (size > MAX_FILE_BYTES) {"));
+    assert!(js.contains("if (bytes > MAX_FILE_BYTES) {"));
+    // An option with surrounding spaces is refused, not trimmed.
+    assert!(js.contains(
+        r#"return { problem: "Remove leading or trailing spaces from " + padded.join(", ") + "." };"#
+    ));
+    // Imports wait longer, and a timed-out one says it may have landed.
+    assert!(js.contains("var IMPORT_TIMEOUT_MS = 60000;"));
+    assert!(js.contains(r#"return calc("import_period", payload, IMPORT_TIMEOUT_MS);"#));
+    assert!(js.contains("The server may already have stored the period. Reload the list"));
+    assert!(js.contains(r#"calc("get_provenance", { trace_id: "#));
+    assert!(js.contains("var MAX_FILE_BYTES = 2097152;"));
+    // The trace view: caller-supplied provenance apart and labelled, the
+    // files table and the raw JSON bounded.
+    assert!(js.contains(r#""Supplied by the caller (not verified by the server)""#));
+    assert!(js.contains("var MAX_FILE_ROWS = 50;"));
+    assert!(js.contains("files.slice(0, MAX_FILE_ROWS)"));
+    assert!(js.contains("var MAX_RAW_CHARS = 65536;"));
+    assert!(js.contains("raw.slice(0, MAX_RAW_CHARS)"));
+    assert!(js.contains("importSeq") && js.contains("traceSeq"));
+    for banned in [
+        "webkitrelativepath",
+        "createobjecturl",
+        "showopenfilepicker",
+        "indexeddb",
+        "formdata",
+        "xmlhttprequest",
+        "sendbeacon",
+        "websocket",
+    ] {
+        assert!(
+            !js.to_ascii_lowercase().contains(banned),
+            "app.js contains {banned}"
+        );
+    }
+    // The only thing done to a file input's selection is emptying it.
+    assert!(js.contains(r#"f.input.value = "";"#));
+    // Every file's text enters the payload in sendImport and nowhere else.
+    assert_eq!(js.matches("texts").count(), 2);
+    // The form is built from describe's adapter list, not from a fixed one.
+    assert!(js.contains("result.adapters"));
+    assert!(!js.contains("canonical.csv"));
+
+    // Under 60 KB together.
+    assert!(html.len() + js.len() + css.len() < 60 * 1024);
+}
+
+/// Each `<form ...>` start tag in the page.
+fn form_tags(html: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = html;
+    while let Some(at) = rest.find("<form") {
+        let tail = &rest[at..];
+        let end = tail.find('>').expect("a form tag is closed");
+        found.push(&tail[..=end]);
+        rest = &tail[end..];
+    }
+    found
+}
+
+#[test]
+fn page_has_the_import_and_trace_landmarks_and_no_form_target() {
+    let html = source("index.html");
+    // The three landmarks the script wires: the import form, its profile
+    // choice (filled from describe) and the trace lookup form.
+    for landmark in [
+        r#"<form id="import-form""#,
+        r#"<select id="import-profile""#,
+        r#"<form id="trace-form""#,
+    ] {
+        assert!(html.contains(landmark), "index.html lacks {landmark}");
+    }
+    // Panels in order: key, load a period, loaded data, review, trace.
+    let order: Vec<usize> = [
+        r#"id="key-panel""#,
+        r#"id="import-panel""#,
+        r#"id="loaded""#,
+        r#"id="review""#,
+        r#"id="trace-panel""#,
+    ]
+    .iter()
+    .map(|id| html.find(id).unwrap_or_else(|| panic!("no {id}")))
+    .collect();
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    assert!(html.contains(">Load a period<") && html.contains(">Look up a trace<"));
+
+    // CSP form-action 'none': every form is handled by script, so none has
+    // an action or method (a file input's own form, if any, would be a form).
+    let forms = form_tags(&html);
+    assert_eq!(forms.len(), 4, "{forms:?}");
+    for tag in forms {
+        let lower = tag.to_ascii_lowercase();
+        for attribute in [" action", " method", " enctype", " target", " formaction"] {
+            assert!(!lower.contains(attribute), "{tag} has{attribute}");
+        }
+    }
+    assert!(!html.to_ascii_lowercase().contains("formaction"));
+    // The correction fields and the confirmation are in the page.
+    for id in [
+        "import-correction",
+        "import-supersedes",
+        "import-reason",
+        "import-confirm-yes",
+        "import-confirm-no",
+        "trace-input",
+    ] {
+        assert!(html.contains(&format!(r#"id="{id}""#)), "no {id}");
+    }
 }
 
 /// The page labels each account's class from its category; its list of
@@ -811,4 +939,120 @@ async fn serve_announces_the_workbench_and_allows_its_own_origin() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+}
+
+/// What the import screen sends: the docs/quickstart-style files as inline
+/// text, one of them with markup in an account name. It comes back from
+/// `review_period` and `get_provenance` as JSON strings, and the recorded
+/// sources list each file's name, size and hash, which is what the page shows.
+#[tokio::test]
+async fn an_inline_import_with_markup_in_a_file_round_trips_as_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("exact.sqlite");
+    let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args(["init", "--database", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(init.status.code(), Some(0));
+    let app = mcp_http::router(Config {
+        database: Some(db),
+        ..loopback_config(3819)
+    });
+    let origin = Some("http://127.0.0.1:3819");
+
+    let actuals = format!(
+        "account_code,account_name,category,amount\n4000,{HOSTILE_NAME},rental income,1000.00\n5000,</td><script>alert(\"x\")</script>,payroll,100.00\n"
+    );
+    let budgets = format!(
+        "account_code,account_name,category,amount\n4000,{HOSTILE_NAME},rental income,900.00\n5000,</td><script>alert(\"x\")</script>,payroll,90.00\n"
+    );
+    let payload = json!({
+        "profile": "canonical.csv/1",
+        "files": {"actuals": actuals, "budgets": budgets},
+        "options": {"property": "Synthetic <b>Elm</b>", "period": "2026-05", "units": "10"}
+    });
+    let imported = send(&app, calc("import_period", None, origin, &payload)).await;
+    assert_eq!(imported.status, StatusCode::OK, "{}", imported.json());
+    let envelope = imported.json();
+    assert_eq!(envelope["status"], "calculated");
+    let revision = envelope["result"]["revision_id"].as_str().unwrap();
+    let trace = envelope["trace_id"].as_str().unwrap();
+    assert!(envelope["citation"].as_str().unwrap().contains(trace));
+
+    let reviewed = send(
+        &app,
+        calc(
+            "review_period",
+            None,
+            origin,
+            &json!({"revision_id": revision}),
+        ),
+    )
+    .await;
+    assert_eq!(reviewed.status, StatusCode::OK, "{}", reviewed.json());
+    assert!(reviewed
+        .header("content-type")
+        .starts_with("application/json"));
+    let review = reviewed.json();
+    assert_eq!(review["result"]["property"], "Synthetic <b>Elm</b>");
+    let accounts = review["result"]["variance"]["by_account"]
+        .as_array()
+        .unwrap();
+    assert_eq!(accounts[0]["account_name"], HOSTILE_NAME);
+    assert_eq!(
+        accounts[1]["account_name"],
+        "</td><script>alert(\"x\")</script>"
+    );
+    let raw = String::from_utf8(reviewed.body.clone()).unwrap();
+    assert!(raw.contains(&format!("\"account_name\":\"{HOSTILE_NAME}\"")));
+
+    // The trace lookup: the revision's sources carry the profile and one
+    // entry per inline file, with its byte count and hash and no path.
+    let looked = send(
+        &app,
+        calc("get_provenance", None, origin, &json!({"trace_id": trace})),
+    )
+    .await;
+    assert_eq!(looked.status, StatusCode::OK, "{}", looked.json());
+    let record = looked.json();
+    assert_eq!(record["result"]["trace"]["function"], "import_period");
+    assert_eq!(record["result"]["trace"]["revision_id"], revision);
+    let sources = &record["result"]["revision"]["sources"];
+    assert_eq!(sources["profile"], "canonical.csv/1");
+    let files = sources["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["name"], "actuals");
+    assert_eq!(files[0]["bytes"], actuals.len());
+    assert_eq!(files[0]["sha256"].as_str().unwrap().len(), 64);
+    assert!(files.iter().all(|f| f.get("path").is_none()));
+
+    // An unknown trace id is a refusal the page shows as the engine says it.
+    let unknown = send(
+        &app,
+        calc(
+            "get_provenance",
+            None,
+            origin,
+            &json!({"trace_id": "00000000-0000-0000-0000-000000000000"}),
+        ),
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(unknown.json()["status"], "refused");
+    assert_eq!(unknown.json()["error"]["code"], "NOT_FOUND");
+
+    // A missing file is the engine's refusal too, not the page's.
+    let missing = send(
+        &app,
+        calc(
+            "import_period",
+            None,
+            origin,
+            &json!({"profile": "canonical.csv/1", "files": {"actuals": actuals},
+                    "options": {"property": "P", "period": "2026-05", "units": "10"}}),
+        ),
+    )
+    .await;
+    assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(missing.json()["error"]["code"], "MISSING_FILE");
 }
