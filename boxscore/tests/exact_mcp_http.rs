@@ -9,7 +9,7 @@ use axum::{
     Router,
 };
 use boxscore::exact::{
-    catalog,
+    catalog, mcp as mcp_server,
     mcp_http::{self, Config, ServeOptions, StaticKeys},
 };
 use serde_json::{json, Value};
@@ -133,6 +133,12 @@ fn assert_challenge(reply: &Reply, path: &str) {
 
 /// Run the same tools/call through the stdio binary.
 fn stdio_call(name: &str, arguments: &Value) -> Value {
+    stdio_request("tools/call", &json!({"name": name, "arguments": arguments}))["result"].clone()
+}
+
+/// Send one request after the handshake through the stdio binary and return
+/// the whole response.
+fn stdio_request(method: &str, params: &Value) -> Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
         .arg("mcp")
         .env_remove("BOXSCORE_MCP_DEBUG")
@@ -148,8 +154,7 @@ fn stdio_call(name: &str, arguments: &Value) -> Value {
                    "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                               "clientInfo": {"name": "t", "version": "0"}}}),
             json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                   "params": {"name": name, "arguments": arguments}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": method, "params": params}),
         ] {
             serde_json::to_writer(&mut stdin, &message).unwrap();
             stdin.write_all(b"\n").unwrap();
@@ -163,7 +168,7 @@ fn stdio_call(name: &str, arguments: &Value) -> Value {
         .map(|l| serde_json::from_slice(l).unwrap())
         .collect();
     assert_eq!(lines.len(), 2);
-    lines[1]["result"].clone()
+    lines[1].clone()
 }
 
 #[tokio::test]
@@ -220,6 +225,23 @@ async fn http_session_matches_the_stdio_path() {
     assert_eq!(h["input_sha256"], s["input_sha256"]);
     assert_eq!(h["function"], "noi_variance");
     assert_eq!(h["result"]["noi_bridge"]["noi_variance"], "5.05");
+
+    // Prompts go through the same dispatcher: both are listed, and start_here
+    // returns the same text over HTTP as over stdio.
+    let prompts = mcp(&app, 4, "prompts/list", json!({})).await;
+    assert_eq!(prompts["result"]["prompts"], json!(mcp_server::prompts()));
+    let start = mcp(&app, 5, "prompts/get", json!({"name": "start_here"})).await;
+    let text = start["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert_eq!(text, mcp_server::start_here_text());
+    for question in mcp_server::START_HERE_QUESTIONS {
+        assert!(text.contains(question), "{question}");
+    }
+    let stdio_prompt = stdio_request("prompts/get", &json!({"name": "start_here"}));
+    assert_eq!(stdio_prompt["result"], start["result"]);
+    let unknown = mcp(&app, 6, "prompts/get", json!({"name": "no_such_prompt"})).await;
+    assert_eq!(unknown["error"]["code"], -32602);
 
     // The /v1/calc route returns the same numbers and the same output hash.
     let direct = send(

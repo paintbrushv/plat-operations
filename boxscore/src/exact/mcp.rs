@@ -26,6 +26,17 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26"];
 pub const SERVER_NAME: &str = "boxscore-exact";
 pub const PROMPT_NAME: &str = "boxscore_grounding";
+/// The analyst entry-point prompt, served beside the grounding prompt.
+pub const START_HERE_PROMPT_NAME: &str = "start_here";
+
+/// The three questions an analyst asks first. This is the single source: the
+/// `start_here` prompt quotes them, and a test fails if the fenced block under
+/// the `start-here-questions` marker in `START_HERE.md` says anything else.
+pub const START_HERE_QUESTIONS: [&str; 3] = [
+    "What is loaded?",
+    "Why did NOI miss budget for Sample Gardens in 2026-05?",
+    "What does review_required mean here?",
+];
 
 /// The grounding rule, verbatim, on every tool description, in the
 /// `initialize` instructions and in the grounding prompt.
@@ -162,7 +173,7 @@ impl Server {
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tools()})),
             "tools/call" => self.call_tool(params).await,
-            "prompts/list" => Ok(json!({"prompts": [prompt_descriptor()]})),
+            "prompts/list" => Ok(json!({"prompts": prompts()})),
             "prompts/get" => get_prompt(&params),
             _ => Err((METHOD_NOT_FOUND, format!("Method not found: {method}"))),
         }
@@ -252,13 +263,22 @@ pub fn tools() -> Vec<Value> {
         .collect()
 }
 
-fn prompt_descriptor() -> Value {
-    json!({
-        "name": PROMPT_NAME,
-        "title": "Boxscore grounding rule",
-        "description": "How to use boxscore-exact numbers: the grounding rule and what the catalog can and cannot do.",
-        "arguments": [],
-    })
+/// Every prompt the server offers, in the order `prompts/list` returns them.
+pub fn prompts() -> Vec<Value> {
+    vec![
+        json!({
+            "name": PROMPT_NAME,
+            "title": "Boxscore grounding rule",
+            "description": "How to use boxscore-exact numbers: the grounding rule and what the catalog can and cannot do.",
+            "arguments": [],
+        }),
+        json!({
+            "name": START_HERE_PROMPT_NAME,
+            "title": "Start here",
+            "description": "First session for an analyst: show what is loaded, then offer three questions to start with. Every number cited.",
+            "arguments": [],
+        }),
+    ]
 }
 
 /// The grounding prompt text: the rule verbatim plus the catalog's scope.
@@ -266,11 +286,35 @@ pub fn prompt_text() -> String {
     format!("{GROUNDING_RULE}\n\n{SCOPE}")
 }
 
+/// The `start_here` prompt text: what to call, how to summarize it, the three
+/// questions from [`START_HERE_QUESTIONS`] verbatim, and the grounding rule.
+pub fn start_here_text() -> String {
+    let questions = START_HERE_QUESTIONS
+        .iter()
+        .map(|q| format!("- {q}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "I am an analyst using boxscore-exact for the first time. Get me started.\n\n\
+         1. Call describe. Then call list_revisions with no arguments (no property or period filter), so you see everything stored.\n\
+         2. Summarize what is loaded, in a few short lines: each property, its periods, the latest revision number for each property and period, and whether a report has been issued for that revision (its reports list is empty when none has). If nothing is stored, say so. If list_revisions refused (for example DATABASE_REQUIRED, when the server has no database), say so and name the error code; do not guess what is loaded.\n\
+         3. Offer me these three questions to start with, word for word:\n\
+         {questions}\n\
+         If Sample Gardens 2026-05 is not loaded, say so and offer the second question for a property and period that is.\n\
+         4. Use only the tools for numbers. review_required is not an error: the numbers are returned, and a person should look at the review reasons before relying on them.\n\n\
+         {GROUNDING_RULE}"
+    )
+}
+
 fn get_prompt(params: &Map<String, Value>) -> Result<Value, (i64, String)> {
     match params.get("name").and_then(Value::as_str) {
         Some(PROMPT_NAME) => Ok(json!({
             "description": "Grounding rule for boxscore-exact results",
             "messages": [{"role": "user", "content": {"type": "text", "text": prompt_text()}}],
+        })),
+        Some(START_HERE_PROMPT_NAME) => Ok(json!({
+            "description": "Start here: what is loaded, and three questions to start with",
+            "messages": [{"role": "user", "content": {"type": "text", "text": start_here_text()}}],
         })),
         Some(other) => Err(invalid_params(&format!("Unknown prompt: {other}"))),
         None => Err(invalid_params("prompts/get needs a string name")),
@@ -556,6 +600,55 @@ mod tests {
         assert_eq!(lines[0]["error"]["code"], INVALID_REQUEST);
         assert_eq!(lines[1], json!({"jsonrpc": "2.0", "id": 7, "result": {}}));
         assert_eq!(lines[2]["id"], 8);
+    }
+
+    #[tokio::test]
+    async fn prompts_list_both_and_get_start_here() {
+        let server = Server::new(None);
+        let listed = server
+            .handle(request(json!(1), "prompts/list", json!({})))
+            .await
+            .unwrap();
+        let prompts = listed["result"]["prompts"].as_array().unwrap();
+        let names: Vec<&str> = prompts
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, [PROMPT_NAME, START_HERE_PROMPT_NAME]);
+        for prompt in prompts {
+            assert!(!prompt["title"].as_str().unwrap().is_empty());
+            assert!(!prompt["description"].as_str().unwrap().is_empty());
+            assert_eq!(prompt["arguments"], json!([]));
+        }
+
+        let got = server
+            .handle(request(
+                json!(2),
+                "prompts/get",
+                json!({"name": START_HERE_PROMPT_NAME}),
+            ))
+            .await
+            .unwrap();
+        let message = &got["result"]["messages"][0];
+        assert_eq!(message["role"], "user");
+        let text = message["content"]["text"].as_str().unwrap();
+        assert_eq!(text, start_here_text());
+        for question in START_HERE_QUESTIONS {
+            assert!(text.contains(question), "{question}");
+        }
+        assert!(text.contains("Call describe. Then call list_revisions with no arguments"));
+        assert!(text.ends_with(GROUNDING_RULE));
+
+        let unknown = server
+            .handle(request(json!(3), "prompts/get", json!({"name": "nope"})))
+            .await
+            .unwrap();
+        assert_eq!(unknown["error"]["code"], INVALID_PARAMS);
+        let unnamed = server
+            .handle(request(json!(4), "prompts/get", json!({})))
+            .await
+            .unwrap();
+        assert_eq!(unnamed["error"]["code"], INVALID_PARAMS);
     }
 
     #[test]
