@@ -246,7 +246,9 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   revisions, reviews one and looks up a trace; it can also import a period
   or a correction, sending the text of the files the user chooses to the
   server over that same connection (in an `import_period` request body, 2 MiB
-  at most, never stored by the page); it cannot issue reports, and it does not
+  at most, never stored by the page) or issue a report for a revision after a
+  confirmation (an `issue_report` call on the same route and connection; the
+  server stores the report and it is sent nowhere); it does not
   support OAuth sign-in (use an API key, or the agent connectors). [tests:
   `boxscore/tests/exact_workbench.rs`; CI: the `serve` check fetches `/`
   and its Content-Security-Policy]
