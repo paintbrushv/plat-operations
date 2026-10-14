@@ -14,6 +14,7 @@ on:
       - 'START_HERE.md'
       - 'docs/quickstart/**'
       - 'scripts/quickstart_check.sh'
+      - 'scripts/workbench_unit_test.mjs'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - 'START_HERE.md'
       - 'docs/quickstart/**'
       - 'scripts/quickstart_check.sh'
+      - 'scripts/workbench_unit_test.mjs'
       - '.github/workflows/ci.yml'
 
 # Cancel superseded runs on the same ref to save minutes.
@@ -61,6 +63,13 @@ jobs:
 
       - name: Test
         run: cargo test --all-targets
+
+      # The workbench page's pure sign-in decisions (app.js exports them under
+      # node only), on the runner's preinstalled Node with its built-in test
+      # runner: no npm, no dependencies.
+      - name: Workbench sign-in unit tests (node --test)
+        working-directory: .
+        run: node --test scripts/workbench_unit_test.mjs
 
       - name: Doc tests
         run: cargo test --doc

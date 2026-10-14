@@ -28,6 +28,13 @@
 //!   line is printed every 10 seconds; the next printed line counts the
 //!   failures suppressed in between.
 //!
+//! With `--oauth-browser-client-id`, the browser workbench also signs in
+//! through the same issuer as a public client (authorization code with
+//! PKCE, run entirely in the page): start-up discovery then also reads the
+//! issuer's `authorization_endpoint` and `token_endpoint` ([`BrowserClient`]).
+//! The server never sees the code or the verifier; the access token the page
+//! obtains is checked here like any other.
+//!
 //! Local JWT validation against the issuer's JWKS (needed for Microsoft
 //! Entra ID and Auth0, which offer no RFC 7662 endpoint) is out of scope: it
 //! would be another [`TokenValidator`] behind the same seam.
@@ -73,6 +80,10 @@ const MAX_SUBJECT_CHARS: usize = 256;
 const MAX_CLIENT_ID_CHARS: usize = 256;
 const MAX_AUDIENCE_CHARS: usize = 1024;
 const MAX_SECRET_BYTES: usize = 4096;
+const AUTHORIZATION_ENDPOINT: &str = "authorization_endpoint in the authorization server metadata";
+const TOKEN_ENDPOINT: &str = "token_endpoint in the authorization server metadata";
+const BROWSER_METADATA_HINT: &str = "--oauth-browser-client-id needs the issuer's metadata for the page's sign-in: check the identity provider's authorization server metadata (RFC 8414), or start without --oauth-browser-client-id";
+const BROWSER_NEEDS_OAUTH: &str = "--oauth-browser-client-id needs OAuth configured: --authorization-server with --oauth-audience, --oauth-client-id and --oauth-client-secret-file (the page's tokens are checked by introspection)";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -90,6 +101,19 @@ pub struct OAuthOptions {
     pub client_secret_file: PathBuf,
     pub audience: String,
     pub scope: String,
+    /// `--oauth-browser-client-id`: the public client the workbench page
+    /// signs in as. `None` when the page offers no sign-in.
+    pub browser: Option<BrowserClient>,
+}
+
+/// The workbench page's public OAuth client and the issuer endpoints it
+/// uses. The endpoints come from the issuer's RFC 8414 metadata at start-up
+/// ([`discover`]); [`OAuthOptions::from_serve`] leaves them `None` until then.
+#[derive(Debug, Clone)]
+pub struct BrowserClient {
+    pub client_id: String,
+    pub authorization_endpoint: Option<Url>,
+    pub token_endpoint: Option<Url>,
 }
 
 /// `https`, or `http` to a loopback host (a local mock or test IdP): the
@@ -125,6 +149,22 @@ impl OAuthOptions {
     /// a secret file and the reverse, more than one issuer, a bad scope, or a
     /// non-https URL to a non-loopback host.
     pub fn from_serve(options: &ServeOptions) -> Result<Option<Self>, StartError> {
+        if options.oauth_browser_client_id.is_none()
+            && (options.oauth_authorization_endpoint.is_some()
+                || options.oauth_token_endpoint.is_some())
+        {
+            return Err(StartError::new(
+                "the authorization and token endpoints are used only with --oauth-browser-client-id",
+            ));
+        }
+        if options.oauth_browser_client_id.is_some()
+            && (options.authorization_servers.is_empty()
+                || options.oauth_audience.is_none()
+                || options.oauth_client_id.is_none()
+                || options.oauth_client_secret_file.is_none())
+        {
+            return Err(StartError::new(BROWSER_NEEDS_OAUTH));
+        }
         let flags = [
             (
                 "--introspection-endpoint",
@@ -206,6 +246,29 @@ impl OAuthOptions {
             .as_deref()
             .map(|raw| secure_url(raw, "--introspection-endpoint"))
             .transpose()?;
+        let browser = match &options.oauth_browser_client_id {
+            None => None,
+            Some(id) => {
+                if !plain_text(id, MAX_CLIENT_ID_CHARS) {
+                    return Err(StartError::new(format!(
+                        "--oauth-browser-client-id must be 1-{MAX_CLIENT_ID_CHARS} characters without spaces or control characters"
+                    )));
+                }
+                Some(BrowserClient {
+                    client_id: id.clone(),
+                    authorization_endpoint: options
+                        .oauth_authorization_endpoint
+                        .as_deref()
+                        .map(|raw| secure_url(raw, AUTHORIZATION_ENDPOINT))
+                        .transpose()?,
+                    token_endpoint: options
+                        .oauth_token_endpoint
+                        .as_deref()
+                        .map(|raw| secure_url(raw, TOKEN_ENDPOINT))
+                        .transpose()?,
+                })
+            }
+        };
         Ok(Some(Self {
             issuer,
             introspection_endpoint,
@@ -213,6 +276,7 @@ impl OAuthOptions {
             client_secret_file,
             audience,
             scope,
+            browser,
         }))
     }
 
@@ -336,14 +400,47 @@ async fn fetch_metadata(client: &reqwest::Client, url: &Url) -> Result<Option<Ve
     read_capped(response).await.map(Some)
 }
 
+/// What start-up discovery reads from the issuer's RFC 8414 metadata.
+#[derive(Debug, Clone)]
+pub struct Discovered {
+    /// Present when it was asked for.
+    pub introspection_endpoint: Option<Url>,
+    /// Both present when the browser endpoints were asked for.
+    pub authorization_endpoint: Option<Url>,
+    pub token_endpoint: Option<Url>,
+}
+
 /// Fetch the issuer's RFC 8414 metadata once and return its
 /// `introspection_endpoint`. For an issuer with a path the RFC 8414 form is
 /// tried first and the appended form only after a `404`. The metadata's
 /// `issuer` must be the configured one; a missing endpoint refuses to start.
 pub async fn discover_introspection_endpoint(issuer: &str) -> Result<Url, StartError> {
+    discover(issuer, true, false)
+        .await?
+        .introspection_endpoint
+        .ok_or_else(|| StartError::new("the metadata has no introspection_endpoint"))
+}
+
+/// Fetch the issuer's RFC 8414 metadata once (the forms and the issuer check
+/// of [`discover_introspection_endpoint`]) and read the endpoints asked for:
+/// `introspection_endpoint` when `introspection`, `authorization_endpoint`
+/// and `token_endpoint` when `browser` (`--oauth-browser-client-id`). Each
+/// one asked for must be present and https (http for a loopback host), and
+/// with `browser` a `code_challenge_methods_supported` that is present must
+/// list `S256`; otherwise start-up is refused.
+pub async fn discover(
+    issuer: &str,
+    introspection: bool,
+    browser: bool,
+) -> Result<Discovered, StartError> {
+    let hint = if introspection {
+        "pass --introspection-endpoint"
+    } else {
+        "--oauth-browser-client-id needs the issuer's metadata for the page's sign-in"
+    };
     let metadata_error = |url: &Url, why: String| {
         StartError::new(format!(
-            "cannot read authorization server metadata from {url}: {why}; pass --introspection-endpoint"
+            "cannot read authorization server metadata from {url}: {why}; {hint}"
         ))
     };
     let candidates = metadata_urls(issuer)?;
@@ -363,9 +460,9 @@ pub async fn discover_introspection_endpoint(issuer: &str) -> Result<Url, StartE
         }
     }
     let Some((url, body)) = found else {
-        return Err(StartError::new(
-            "cannot read authorization server metadata; pass --introspection-endpoint",
-        ));
+        return Err(StartError::new(format!(
+            "cannot read authorization server metadata; {hint}"
+        )));
     };
     let failed = |why: String| metadata_error(url, why);
     let metadata: Value =
@@ -379,14 +476,58 @@ pub async fn discover_introspection_endpoint(issuer: &str) -> Result<Url, StartE
             "its issuer is {advertised:?}, not {issuer:?} (RFC 8414 section 3.3)"
         )));
     }
-    let endpoint = metadata
-        .get("introspection_endpoint")
-        .and_then(Value::as_str)
-        .ok_or_else(|| failed("it has no introspection_endpoint".into()))?;
-    secure_url(
-        endpoint,
-        "introspection_endpoint in the authorization server metadata",
-    )
+    // A missing or unusable endpoint is the metadata's problem: say so,
+    // with the hint for that endpoint (only the introspection endpoint can
+    // be given on the command line instead).
+    let endpoint = |name: &str, what: &str, hint: &str| -> Result<Url, StartError> {
+        let wrong = |why: String| {
+            StartError::new(format!(
+                "cannot use authorization server metadata from {url}: {why}; {hint}"
+            ))
+        };
+        let raw = metadata
+            .get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| wrong(format!("it has no {name}")))?;
+        secure_url(raw, what).map_err(|e| wrong(e.to_string()))
+    };
+    let mut discovered = Discovered {
+        introspection_endpoint: None,
+        authorization_endpoint: None,
+        token_endpoint: None,
+    };
+    if introspection {
+        discovered.introspection_endpoint = Some(endpoint(
+            "introspection_endpoint",
+            "introspection_endpoint in the authorization server metadata",
+            "pass --introspection-endpoint",
+        )?);
+    }
+    if browser {
+        discovered.authorization_endpoint = Some(endpoint(
+            "authorization_endpoint",
+            AUTHORIZATION_ENDPOINT,
+            BROWSER_METADATA_HINT,
+        )?);
+        discovered.token_endpoint = Some(endpoint(
+            "token_endpoint",
+            TOKEN_ENDPOINT,
+            BROWSER_METADATA_HINT,
+        )?);
+        // RFC 8414 section 2: absent means the methods are not advertised;
+        // present without S256 means the page's PKCE would be refused.
+        if let Some(methods) = metadata.get("code_challenge_methods_supported") {
+            let s256 = methods
+                .as_array()
+                .is_some_and(|list| list.iter().any(|m| m.as_str() == Some("S256")));
+            if !s256 {
+                return Err(StartError::new(format!(
+                    "cannot use authorization server metadata from {url}: its code_challenge_methods_supported does not include S256, which the workbench page's sign-in (PKCE) needs; {BROWSER_METADATA_HINT}"
+                )));
+            }
+        }
+    }
+    Ok(discovered)
 }
 
 // ---------------------------------------------------------------------------

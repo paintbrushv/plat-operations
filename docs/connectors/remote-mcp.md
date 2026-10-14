@@ -183,6 +183,7 @@ run API keys and OAuth on separate server instances.
 | `--oauth-client-secret-file PATH` | yes | One line: that client's secret. Same rules as the API key file: other users must not be able to read it (0600). |
 | `--introspection-endpoint URL` | no | The RFC 7662 endpoint. When absent, the server reads the issuer's RFC 8414 metadata once at start-up, checks that its `issuer` matches, and uses its `introspection_endpoint`; metadata without one refuses to start. For an issuer with a path (`https://host/tenant`) it tries the RFC 8414 form `https://host/.well-known/oauth-authorization-server/tenant` first and, only on a `404`, the appended form `https://host/tenant/.well-known/oauth-authorization-server`; an issuer without a path has only the second form. Pass the flag explicitly when the IdP serves metadata elsewhere. |
 | `--oauth-scope SCOPE` | no | The scope a token must carry; default `boxscore:calc`. |
+| `--oauth-browser-client-id ID` | no | The public client IT registers for the browser workbench, so analysts sign in on the page instead of pasting an API key. See [Browser workbench sign-in](#browser-workbench-sign-in). Needs the four required flags above; the issuer's `authorization_endpoint` and `token_endpoint` are then read from its metadata at start-up (also when `--introspection-endpoint` is given). |
 
 `serve` refuses to start on any inconsistent combination: an OAuth flag
 without `--authorization-server`; `--authorization-server` without
@@ -192,7 +193,10 @@ client id without a secret file or the reverse; more than one
 non-loopback host; a URL carrying a user name, password, query or fragment
 (the refusal never repeats the URL); a non-loopback `--bind` without
 `--public-url`; a scope with spaces or quotes; an empty or world-readable
-secret file. (Before this change, `--authorization-server` alone only
+secret file; `--oauth-browser-client-id` without the four required OAuth
+flags, or with issuer metadata that lacks an `authorization_endpoint` or
+`token_endpoint`, or names one that is plain `http` on a non-loopback host
+or carries a query. (Before this change, `--authorization-server` alone only
 advertised the IdP; it now always enables validation and needs the other
 flags.)
 
@@ -267,6 +271,147 @@ secret into the connector settings.
    tokens. Revocation takes effect here within 5 minutes (the cache cap).
 6. **Network.** The server must reach the introspection endpoint over HTTPS;
    allow that one egress in your firewall.
+
+### Browser workbench sign-in
+
+The [browser workbench](../INSTALL.md#browser-workbench) at `<public-url>/`
+can sign analysts in through the same IdP, so nobody on a shared deployment
+needs an API key. The page runs the OAuth 2.1 authorization code flow with
+PKCE itself, as a **public client** (no secret: a secret in a web page is
+not a secret). The server's part is small: it tells the page where to go,
+and it checks the resulting access token by introspection like any other.
+
+**What IT registers at the IdP** (once per deployment):
+
+1. A **public client** for the page, for example `boxscore-workbench`:
+   authorization code flow only (no implicit flow, no password grant, no
+   client credentials), **PKCE required with `S256`**, and exactly one
+   redirect URI, **`<public-url>/`** with the trailing slash (for example
+   `https://boxscore.example.com/`).
+2. **CORS on the token endpoint.** The page POSTs the code to the IdP's
+   token endpoint from its own origin, so the IdP must answer that origin
+   with `Access-Control-Allow-Origin`. Keycloak: the client's *Web Origins*
+   (`https://boxscore.example.com`, or `+` for "the redirect URIs'
+   origins").
+3. **The scope and the audience**, as for a connector (checklist steps 2
+   and 3 above): the client may request `boxscore:calc` (or your
+   `--oauth-scope`), and the access token's `aud` must contain
+   `--oauth-audience`. With Keycloak, giving the client the `boxscore:calc`
+   scope as a default scope brings the audience mapper with it.
+4. **An origin of its own for the workbench.** Serve it on a host name that
+   no other web application shares (not a path beside other apps on one
+   host): the token lives in `sessionStorage`, which every page on the same
+   origin can read.
+
+Then start `serve` with `--oauth-browser-client-id boxscore-workbench` next
+to the OAuth flags. The banner adds
+`boxscore-exact serve: workbench sign-in: OAuth via <issuer> (client boxscore-workbench)`.
+No token, code or secret is ever printed.
+
+**What the server does.** At start-up it reads the issuer's metadata and
+keeps its `authorization_endpoint` and `token_endpoint` (both must be
+present and `https`, or `http` to a loopback host, and if the metadata lists
+`code_challenge_methods_supported` it must include `S256`; otherwise it
+refuses to start, naming the rule and asking you to check the IdP's
+metadata). `GET /workbench/auth.json` (public, `no-store`, the page's security
+headers) tells the page how to authenticate:
+
+```json
+{"mode": "oauth",
+ "issuer": "https://idp.example.com/realms/acme",
+ "authorization_endpoint": "https://idp.example.com/realms/acme/protocol/openid-connect/auth",
+ "token_endpoint": "https://idp.example.com/realms/acme/protocol/openid-connect/token",
+ "client_id": "boxscore-workbench", "scope": "openid boxscore:calc",
+ "audience": "https://boxscore.example.com/mcp",
+ "redirect_uri": "https://boxscore.example.com/"}
+```
+
+`mode` is `none` (a loopback server without authentication), `api_key`,
+`oauth`, or `api_key_or_oauth` when both are configured (the page then
+offers sign-in and the key form). Without `--oauth-browser-client-id` the
+document is just the mode, and the page shows the key form as before. The
+page's Content-Security-Policy gains the token endpoint's exact URL in
+`connect-src`
+(`connect-src 'self' https://idp.example.com/realms/acme/protocol/openid-connect/token`:
+scheme, host, port and path, no query), so the page can POST to that one
+URL and to nothing else at the IdP; nothing else changes. The endpoint's
+host must be an IP address or DNS labels of ASCII letters, digits, `-` and
+`.`, or the server refuses to start. The server makes no new outbound
+call.
+
+**What the page does.**
+
+1. *Sign in with your firm's identity provider*: it draws a 64-character
+   PKCE verifier and a 32-character `state` from `crypto.getRandomValues`,
+   computes `code_challenge` = base64url(SHA-256(verifier)) with
+   `crypto.subtle` (so it needs `https` or a loopback address), keeps
+   `{verifier, state, started_at}` in the tab's `sessionStorage`, and goes
+   to the authorization endpoint with `response_type=code`, `client_id`,
+   `redirect_uri`, `scope`, `state`, `code_challenge`,
+   `code_challenge_method=S256` and `resource=<audience>`. `resource` is
+   the RFC 8707 resource indicator: IdPs may ignore it (Keycloak does), but
+   RFC 8707 requires an absolute URI and strict IdPs refuse anything else,
+   so make `--oauth-audience` one (the Keycloak recipe's
+   `http://127.0.0.1:3819/mcp` and the example's
+   `https://boxscore.example.com/mcp` are). That URL is built only from
+   `auth.json`. Sign-in starts only at the redirect URI's own origin: a page
+   opened as `http://localhost:3819/` when the redirect URI is
+   `http://127.0.0.1:3819/` says "Sign-in works only at
+   http://127.0.0.1:3819/; open the workbench there." instead of leaving
+   (the answer would land in another origin's `sessionStorage`).
+2. Back at `<public-url>/` with `code` or `error` in the query, it first
+   removes the query from the address bar and history
+   (`history.replaceState`) and deletes the stored verifier and state,
+   whatever follows. A callback without `state`, with a `state` that is not
+   this tab's (or with none stored: a replay), or with an `iss` (RFC 9207)
+   other than the issuer is discarded: "Sign-in response did not match this
+   tab; start again."; one older than 10 minutes: "The sign-in took too
+   long; start again."; one that arrives while `auth.json` could not be
+   loaded: "Sign-in could not be completed because the server's sign-in
+   settings could not be loaded; start again." Otherwise it POSTs
+   `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id` and
+   `code_verifier` as a form to the token endpoint, without cookies and
+   without a secret. An IdP error (`error`, `error_description`) is shown as
+   text, verbatim.
+3. It keeps `access_token` and `expires_at` (now plus `expires_in`) in the
+   tab's `sessionStorage` and sends the token as the bearer on every
+   `/v1/calc` call (before any API key). A refresh token, if the IdP sends
+   one, is neither stored nor used; an ID token is ignored.
+
+**What is stored where.** The verifier and `state`: the tab's
+`sessionStorage`, from the click until the page comes back. The access token
+and its expiry: the tab's `sessionStorage`, until it expires, is refused,
+the analyst signs out, or the tab closes. Nothing in `localStorage`,
+cookies, the console or any URL except the authorize request (which carries
+the challenge and state, never the verifier or a token). `sessionStorage`
+belongs to the origin, not to the page: any other page served from the
+same origin can read it, which is why the workbench needs an origin of its
+own (step 4 above). A duplicated tab starts with a copy of it, token
+included, and from then on the two tabs are separate: signing out in one
+does not sign out the other. The server stores only the introspection
+verdict, keyed by the token's SHA-256, as for any token.
+
+**Expiry and sign-out.** The page does not watch the clock: expiry is
+handled on the next request. When the token's `expires_at` has passed by
+then, the page drops the token, sends nothing (not under an API key
+either), shows the sign-in panel and says "Your sign-in expired; sign in
+again." (the IdP usually signs the analyst straight back in while its own
+session lasts). A `401` from the server to the token is handled the same
+way. Until the analyst signs in again or chooses *Sign out*, the tab sends
+no request: an API key in the same tab is used only when no token was kept
+in it, or after *Sign out*. A `403 INSUFFICIENT_SCOPE` is shown verbatim
+with a note that the IdP did not grant `boxscore:calc`. *Sign out* forgets
+the token in this tab only; the session at the IdP is not ended, so on a
+shared computer sign out there too.
+
+**Verified** against Keycloak 26.0.8 on 2026-10-14 with the
+`boxscore-workbench` client in
+[keycloak-realm.example.json](keycloak-realm.example.json) (see
+[below](#browser-sign-in-with-keycloak-verified-2026-10-14)). Okta,
+Microsoft Entra ID and Auth0 were not tried; Entra ID and Auth0 cannot be
+used with this release anyway (no introspection), and whether Okta's token
+endpoint answers a browser origin (CORS, a "SPA" application with the
+origin trusted) is unverified.
 
 ### claude.ai custom connector (unverified)
 
@@ -427,6 +572,13 @@ The realm file defines:
 - `boxscore-noscope`: like `boxscore-test` but without `boxscore:calc`. It
   carries its own audience mapper, so its tokens have the right `aud` and
   only the scope is missing (the `403` case);
+- `boxscore-workbench`: public, standard flow (authorization code) only,
+  PKCE `S256` required, redirect URI `http://127.0.0.1:3819/`, web origin
+  `http://127.0.0.1:3819`, default scopes `basic` and `boxscore:calc`: the
+  [browser workbench sign-in](#browser-workbench-sign-in). The page also
+  asks for `openid`, which Keycloak grants as the OpenID Connect scope; it is
+  not a client scope (listing it under `defaultClientScopes` only logs
+  "Referenced client scope 'openid' doesn't exist. Ignoring");
 - user `alice`, password `fake-alice-password`.
 
 Run from the repository root, with `boxscore-exact` on the `PATH` (see
@@ -599,6 +751,103 @@ got `503` with `retry-after: 5`, and stderr said
 alice's already accepted token kept working from the cache. Neither the
 token nor the secret appeared in the server's output.
 
+#### Browser sign-in with Keycloak (verified 2026-10-14)
+
+Same Keycloak 26.0.8 tarball, Java 21, realm file as committed, fresh
+database with the quickstart month; the server started as in step 2 with
+`--oauth-browser-client-id boxscore-workbench` added. The banner's last line
+was
+`boxscore-exact serve: workbench sign-in: OAuth via http://127.0.0.1:8080/realms/boxscore (client boxscore-workbench)`,
+and `curl -si http://127.0.0.1:3819/workbench/auth.json` answered `200`
+with the page's headers, `connect-src 'self' http://127.0.0.1:8080`
+(the token endpoint's origin, as the page then named it; see the re-run
+below for the exact-URL form), and
+`mode` `oauth`, the two Keycloak endpoints under
+`/realms/boxscore/protocol/openid-connect/`, `client_id`
+`boxscore-workbench`, `scope` `openid boxscore:calc`, `audience`
+`http://127.0.0.1:3819/mcp` and `redirect_uri` `http://127.0.0.1:3819/`.
+
+No browser was available on the test host, so the page's own `app.js` ran
+in jsdom 24 under Node 24 (`crypto.subtle` from Node's WebCrypto; a fetch
+shim that sent `Origin: http://127.0.0.1:3819`, enforced the page's
+`connect-src` and refused a cross-origin answer without a matching
+`Access-Control-Allow-Origin`), and `curl` with a cookie jar played the
+user at Keycloak's login form. What happened:
+
+- Before sign-in the page showed the sign-in panel (no key form) and
+  `HTTP 401 UNAUTHORIZED · A valid bearer token is required · Sign in to continue.`
+- *Sign in* produced exactly one navigation, to
+  `http://127.0.0.1:8080/realms/boxscore/protocol/openid-connect/auth` with
+  `response_type=code`, `client_id=boxscore-workbench`,
+  `redirect_uri=http://127.0.0.1:3819/`, `scope=openid boxscore:calc`, a
+  32-character `state`, a 43-character `code_challenge` equal to the
+  base64url SHA-256 of the stored 64-character verifier,
+  `code_challenge_method=S256` and `resource=http://127.0.0.1:3819/mcp`;
+  `sessionStorage` then held only the pending entry.
+- `curl` fetched that URL (Keycloak's login page), posted `alice` and
+  `fake-alice-password` to the form's action and got `302` to
+  `http://127.0.0.1:3819/?state=...&session_state=...&iss=...&code=...`
+  with the same `state`.
+- Loading that URL in the same tab (its `sessionStorage` kept), the page
+  POSTed the five form fields to the token endpoint (`200`, Keycloak
+  answered `Access-Control-Allow-Origin: http://127.0.0.1:3819`), then
+  `describe` and `list_revisions` with the bearer (both `200`), and showed
+  "1 revision loaded" and "Signed in through
+  http://127.0.0.1:8080/realms/boxscore; the sign-in expires at ..." (300
+  seconds). The address was `http://127.0.0.1:3819/` with no query;
+  `sessionStorage` held only the token entry, and the verifier appeared in
+  no stored value. The page logged nothing to the console.
+- `list_revisions` with that token from `curl`: `200`, `calculated`, one
+  revision.
+- Loading the same callback URL again: "Sign-in response did not match
+  this tab; start again.", no token request, query removed.
+- A stored token whose `expires_at` had passed, and a token the server
+  refused (`401`): dropped, "Your sign-in expired; sign in again."
+- A token from `boxscore-noscope`: `HTTP 403 INSUFFICIENT_SCOPE · The access
+  token does not carry the required scope · The identity provider did not
+  grant boxscore:calc to this sign-in: ask IT to add it to the workbench
+  client.`
+- *Sign out*: token gone, "Signed out of this page. Your session at the
+  identity provider is not ended: ...".
+- A real code redeemed with a different verifier: Keycloak answered
+  `invalid_grant` / `PKCE verification failed: Code mismatch`, shown as
+  "The identity provider refused the sign-in: invalid_grant: PKCE
+  verification failed: Code mismatch"; an `error_description` with markup
+  was shown as text.
+
+Not covered by this run: a real browser's CORS check and CSP
+enforcement (the shim imitated both), Keycloak's consent screen (the client
+has consent off), and any IdP other than Keycloak.
+
+**Re-run the same day** after the review fixes (fresh Keycloak 26.0.8 from
+the tarball, the committed realm file, fresh database), with the shim now
+matching `connect-src` by exact URL as CSP3 does:
+
+- Start-up passed the new PKCE check (Keycloak's metadata lists
+  `code_challenge_methods_supported` `["plain","S256"]`), and the page's
+  policy was
+  `connect-src 'self' http://127.0.0.1:8080/realms/boxscore/protocol/openid-connect/token`.
+  The sign-in, the exchange (`200`, `Access-Control-Allow-Origin:
+  http://127.0.0.1:3819`), `describe` and `list_revisions` (`200`) went as
+  above; Keycloak's callback carries `iss`
+  (`http://127.0.0.1:8080/realms/boxscore`), which matched. A fetch from the
+  page to Keycloak's `userinfo` endpoint was refused by `connect-src`.
+  `auth.json` and the resource metadata were fetched without a bearer.
+- Expiry mid-session, with an API key also stored in the tab: signed in and
+  loaded, the token's `expires_at` passed, and *Reload* sent nothing,
+  neither the token nor the key; the panel switched from "Signed in
+  through ..." to "Your sign-in expired; sign in again." with the sign-in
+  button (and *Sign out*), and the status read "Could not list revisions:
+  Nothing was sent. Your sign-in expired; sign in again." After *Sign out*
+  the next *Reload* went out with the key. A page loaded with an expired
+  token sent no API request at all; a token the server refused (`401`) left
+  the same "expired" state, so no later request fell back to a key.
+- Opened at `http://localhost:3819/`: *Sign in* did not navigate and said
+  "Sign-in works only at http://127.0.0.1:3819/; open the workbench there."
+- A callback with another issuer's `iss`, and one without `state`: "Sign-in
+  response did not match this tab; start again.", query removed, pending
+  entry dropped, no token request.
+
 Clean up with `docker rm -f kc` (or stop `kc.sh`), stop the server, and
 delete `kc-test.sqlite` and `kc-client-secret`.
 
@@ -666,6 +915,7 @@ is not cached.
 
 - On stderr: one line at start-up (the bound address and the auth mode), a
   second line with OAuth (issuer, introspection endpoint, audience, scope),
+  a third with browser sign-in (issuer and the page's client id),
   one line at shutdown, a warning for a group-readable key or secret file,
   start-up refusals, and a line for a failed or refused introspection call
   (the endpoint and a failure category such as `timed out`,

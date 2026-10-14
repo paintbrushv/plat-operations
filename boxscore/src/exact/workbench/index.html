@@ -19,10 +19,19 @@
 <main class="wrap">
   <p id="status" class="status" role="status" aria-live="polite"></p>
 
+  <section id="signin-panel" class="panel" aria-labelledby="signin-h" hidden>
+    <h2 id="signin-h">Sign in</h2>
+    <p>This server accepts sign-in through your firm's identity provider. The access token it issues is kept in this tab's session storage only, sent as a bearer token to this server, and forgotten when the tab closes; when it expires, this page asks you to sign in again.</p>
+    <p id="signin-message" class="note"></p>
+    <div class="inline-form">
+      <button type="button" id="signin-start">Sign in with your firm's identity provider</button>
+      <button type="button" id="signin-out" hidden>Sign out</button>
+    </div>
+  </section>
+
   <section id="key-panel" class="panel" aria-labelledby="key-h" hidden>
     <h2 id="key-h">API key</h2>
-    <p>This server needs an API key. Paste the one your administrator gave you. It is kept in this tab's session storage only, sent as a bearer token to this server, and forgotten when the tab closes.</p>
-    <p class="muted">Signing in with your firm's identity provider (OAuth) is not supported on this page yet: use an API key, or the agent connectors.</p>
+    <p>This server accepts an API key. Paste the one your administrator gave you. It is kept in this tab's session storage only, sent as a bearer token to this server, and forgotten when the tab closes.</p>
     <form id="key-form" class="inline-form">
       <label for="key-input">API key</label>
       <input id="key-input" type="password" autocomplete="off" spellcheck="false" autocapitalize="off">

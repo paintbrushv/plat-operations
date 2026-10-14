@@ -97,6 +97,13 @@ enum Command {
         /// Scope a token must carry.
         #[arg(long, value_name = "SCOPE")]
         oauth_scope: Option<String>,
+        /// Public OAuth client registered at the issuer for the browser
+        /// workbench (authorization code with PKCE, redirect URI
+        /// <public-url>/): the page then offers sign-in through the identity
+        /// provider. Needs the OAuth options above; the issuer's
+        /// authorization and token endpoints are read from its metadata.
+        #[arg(long, value_name = "ID")]
+        oauth_browser_client_id: Option<String>,
     },
     /// Create a new exact-cent database; existing paths are refused.
     Init {
@@ -393,6 +400,7 @@ async fn main() {
         oauth_client_secret_file,
         oauth_audience,
         oauth_scope,
+        oauth_browser_client_id,
     } = command
     {
         let options = exact::mcp_http::ServeOptions {
@@ -408,6 +416,9 @@ async fn main() {
             oauth_client_secret_file,
             oauth_audience,
             oauth_scope,
+            oauth_browser_client_id,
+            oauth_authorization_endpoint: None,
+            oauth_token_endpoint: None,
         };
         let code = match exact::mcp_http::serve(options, exact::mcp_http::shutdown_signal()).await {
             Ok(()) => 0,

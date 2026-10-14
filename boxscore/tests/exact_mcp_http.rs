@@ -39,6 +39,8 @@ fn config(database: Option<PathBuf>) -> Config {
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: false,
         loopback_port: None,
+        api_keys: true,
+        browser_oauth: None,
     }
 }
 
