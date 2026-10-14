@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Row, SqlitePool,
+    Row, SqliteConnection, SqlitePool,
 };
 use std::{collections::BTreeMap, fs::OpenOptions, path::Path, time::Duration};
 
@@ -325,15 +325,20 @@ fn snapshot_money(s: &Snapshot) -> [(&str, Option<Money>); 5] {
 }
 
 pub async fn load(pool: &SqlitePool, id: &str) -> Result<Dataset> {
+    let mut conn = pool.acquire().await?;
+    load_on(&mut conn, id).await
+}
+
+async fn load_on(conn: &mut SqliteConnection, id: &str) -> Result<Dataset> {
     let revision = sqlx::query("SELECT * FROM exact_revisions WHERE id=?")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .ok_or_else(|| error("NOT_FOUND", "Unknown revision"))?;
     let mut sides = [Vec::new(), Vec::new()];
     for row in sqlx::query("SELECT * FROM exact_gl WHERE revision_id=? ORDER BY kind,ordinal")
         .bind(id)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?
     {
         let index = if row.get::<String, _>("kind") == "actual" {
@@ -350,14 +355,14 @@ pub async fn load(pool: &SqlitePool, id: &str) -> Result<Dataset> {
     }
     let snapshot = if let Some(s) = sqlx::query("SELECT * FROM exact_snapshots WHERE revision_id=?")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
     {
         let mut money = BTreeMap::new();
         for row in
             sqlx::query("SELECT field,amount_cents FROM exact_snapshot_money WHERE revision_id=?")
                 .bind(id)
-                .fetch_all(pool)
+                .fetch_all(&mut *conn)
                 .await?
         {
             money.insert(
@@ -397,11 +402,16 @@ pub async fn load(pool: &SqlitePool, id: &str) -> Result<Dataset> {
 /// instead of feeding altered numbers to a calculation. Does not run
 /// [`Dataset::validate`]; callers do that on data they now know is unaltered.
 pub async fn load_verified(pool: &SqlitePool, id: &str) -> Result<Dataset> {
-    let data = load(pool, id).await?;
+    let mut conn = pool.acquire().await?;
+    load_verified_on(&mut conn, id).await
+}
+
+async fn load_verified_on(conn: &mut SqliteConnection, id: &str) -> Result<Dataset> {
+    let data = load_on(conn, id).await?;
     let expected: String =
         sqlx::query_scalar("SELECT input_sha256 FROM exact_revisions WHERE id=?")
             .bind(id)
-            .fetch_one(pool)
+            .fetch_one(&mut *conn)
             .await?;
     if digest(&serde_json::to_vec(&data)?) != expected {
         return Err(error(
@@ -413,11 +423,16 @@ pub async fn load_verified(pool: &SqlitePool, id: &str) -> Result<Dataset> {
 }
 
 pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
-    let data = load_verified(pool, id).await?;
+    let mut conn = pool.acquire().await?;
+    review_on(&mut conn, id).await
+}
+
+async fn review_on(conn: &mut SqliteConnection, id: &str) -> Result<Value> {
+    let data = load_verified_on(conn, id).await?;
     data.validate()?;
     let row = sqlx::query("SELECT * FROM exact_revisions WHERE id=?")
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
     let key = |l: &Line| l.account_code.clone();
     let actual_keys: std::collections::BTreeSet<_> = data.actuals.iter().map(&key).collect();
@@ -471,11 +486,11 @@ pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
     let parent: Option<String> = row.get("parent_id");
     let mut changes = BTreeMap::new();
     if let Some(previous_id) = &parent {
-        let previous = load(pool, previous_id).await?;
+        let previous = load_on(conn, previous_id).await?;
         let previous_hash: String =
             sqlx::query_scalar("SELECT input_sha256 FROM exact_revisions WHERE id=?")
                 .bind(previous_id)
-                .fetch_one(pool)
+                .fetch_one(&mut *conn)
                 .await?;
         if digest(&serde_json::to_vec(&previous)?) != previous_hash {
             return Err(error(
@@ -513,8 +528,65 @@ pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
     )
 }
 
+/// Refuse a revision that has a successor: some stored revision names it as
+/// its `parent_id`. The message names the latest revision of the chain, found
+/// by following `parent_id` links forward. An unknown id has no successor and
+/// falls through to the review, which refuses it as `NOT_FOUND`.
+async fn refuse_superseded(conn: &mut SqliteConnection, id: &str) -> Result<()> {
+    let Some(mut latest) = next_revision(conn, id).await? else {
+        return Ok(());
+    };
+    let mut seen = std::collections::BTreeSet::from([id.to_string()]);
+    while let Some(next) = next_revision(conn, &latest.0).await? {
+        if !seen.insert(latest.0.clone()) {
+            return Err(error("INTEGRITY_ERROR", "Revision chain contains a cycle"));
+        }
+        latest = next;
+    }
+    let (latest_id, latest_number) = latest;
+    let number: i64 = sqlx::query_scalar("SELECT revision FROM exact_revisions WHERE id=?")
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?;
+    Err(error(
+        "SUPERSEDED",
+        format!(
+            "Revision {id} (revision {number}) is superseded; the latest is {latest_id} (revision {latest_number})"
+        ),
+    ))
+}
+
+/// The revision whose `parent_id` is `id`, with its revision number.
+async fn next_revision(conn: &mut SqliteConnection, id: &str) -> Result<Option<(String, i64)>> {
+    let row = sqlx::query("SELECT id,revision FROM exact_revisions WHERE parent_id=?")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    row.map(|row| Ok((row.try_get("id")?, row.try_get("revision")?)))
+        .transpose()
+}
+
+/// Issue a report for the latest revision of a property and period. A
+/// superseded revision refuses `SUPERSEDED`; `review_required` revisions still
+/// issue, and issuing the latest again makes another report.
+///
+/// The successor check, the review and the insert run on one connection in an
+/// immediate transaction, which takes SQLite's write lock before the check. A
+/// correction committed by another connection (another process on the same
+/// database file) therefore either lands before the check, and the issue
+/// refuses, or waits until the report is stored; it cannot slip in between.
 pub async fn issue(pool: &SqlitePool, id: &str) -> Result<Value> {
-    let mut result = review(pool, id).await?;
+    // The `Transaction` guard rolls back when dropped, on an error or when the
+    // caller's future is cancelled, so no open transaction outlives the call.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let result = issue_in_transaction(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+async fn issue_in_transaction(conn: &mut SqliteConnection, id: &str) -> Result<Value> {
+    refuse_superseded(conn, id).await?;
+    let mut result = review_on(conn, id).await?;
     let report_id = crate::db::new_id();
     let issued_at = crate::db::now_iso();
     result["report_id"] = json!(report_id);
@@ -526,7 +598,7 @@ pub async fn issue(pool: &SqlitePool, id: &str) -> Result<Value> {
         .bind(&body)
         .bind(digest(body.as_bytes()))
         .bind(issued_at)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     Ok(result)
 }

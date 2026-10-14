@@ -11,12 +11,12 @@ against what the engine computed.
 ## What a citation says
 
 ```
-boxscore issue_report@1.0.0 · trace 3f0c9b52-6a0e-4d0b-9a77-1c2d3e4f5a6b · input sha256:1b7638a0c2d4… · output sha256:ce5487f1e2a3… · revision 8e1d… · report 41a9…
+boxscore issue_report@1.1.0 · trace 3f0c9b52-6a0e-4d0b-9a77-1c2d3e4f5a6b · input sha256:1b7638a0c2d4… · output sha256:ce5487f1e2a3… · revision 8e1d… · report 41a9…
 ```
 
 | part | meaning |
 |---|---|
-| `issue_report@1.0.0` | the catalog function and the exact version that served the call (`@unknown` if no such function exists) |
+| `issue_report@1.1.0` | the catalog function and the exact version that served the call (`@unknown` if no such function exists) |
 | `trace <id>` | the full UUID v4 `trace_id` for this call; use it to look the record up |
 | `input sha256:…` | first 12 hex characters of `input_sha256`, the hash of the input bytes as the transport received them (canonical JSON for in-process calls) |
 | `output sha256:…` | first 12 hex characters of `output_sha256`, the hash of the canonical JSON `result` |
@@ -97,7 +97,10 @@ the function on `input_json` reproduces `output_sha256`.
    - For an issued report, compare `sha256` of the stored report body with
      `report.body_sha256`. An issued report includes its own `report_id` and
      `issued_at`, so issuing again creates a new report with a different hash.
-     Compare against the record; do not compare against a fresh issue.
+     Compare against the record; do not compare against a fresh issue. From
+     `issue_report@1.1.0`, a superseded revision refuses (`SUPERSEDED`), so a
+     report on a revision that has since been corrected is a record of what
+     was issued before the correction, not a current figure.
 
 ## What a citation does not prove
 

@@ -91,8 +91,15 @@ Reconcile duplicate rows in the source before importing.
 Corrections require `--supersedes CURRENT_REVISION_ID --reason "..."` on any import subcommand.
 Every correction adds a revision. Reports include the change in each bridge
 value versus the previous revision. Issuance always creates a new report ID;
-old report bodies stay unchanged. `calculated` means arithmetic completed.
-Every report says `human_approval: not_granted`.
+old report bodies stay unchanged. Issuing refuses a revision that a correction
+has superseded: if any stored revision names it as its parent, `issue` and
+`issue_report` refuse with `SUPERSEDED`, and the message names the latest
+revision of the chain by id and revision number (`Revision <id> (revision 1)
+is superseded; the latest is <id> (revision 2)`). There is no override; issue
+the latest revision instead. Issuing the latest revision again still makes
+another report, and a `review_required` revision still issues, its review
+reasons visible in the report. `calculated` means arithmetic completed. Every
+report says `human_approval: not_granted`.
 
 ## Money and persistence contract
 
@@ -126,11 +133,11 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 
 | function | stateful | what it returns |
 |---|---|---|
-| `describe@1.2.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
+| `describe@1.3.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
 | `noi_variance@1.0.0` | no | the `plat.ops/1` variance bridge from inline rows |
 | `import_period@1.1.0` | yes | `revision_id` for a canonical dataset, or for an adapter profile run on inline file contents (`supersedes` + `reason` for corrections) |
 | `review_period@1.0.0` | yes | the same body as `review` |
-| `issue_report@1.0.0` | yes | the same body as `issue` |
+| `issue_report@1.1.0` | yes | the same body as `issue`; refuses `SUPERSEDED` for a revision a correction has superseded, naming the latest revision (1.1.0 adds that refusal; no number changes for a latest revision) |
 | `list_revisions@1.0.0` | yes | stored revisions and their issued reports |
 | `occupancy@1.0.0` | no | occupied units over unit count as a ratio, with the unit counts and `down_units_present` review reason |
 | `economic_occupancy@1.0.0` | no | in-place rent over market rent as a ratio, both totals echoed; refuses `MISSING_MARKET_RENT`, `MISSING_IN_PLACE_RENT`, `ZERO_DENOMINATOR` |

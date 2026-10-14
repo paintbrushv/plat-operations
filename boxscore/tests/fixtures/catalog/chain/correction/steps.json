@@ -1,5 +1,5 @@
 {
-  "description": "Import a period, review it, issue a report, then correct the period and review the correction and the revision chain.",
+  "description": "Import a period, review it, issue a report, then correct the period, review the correction and the revision chain, and issue again: the superseded original is refused and the correction issues.",
   "steps": [
     {
       "capture": {
@@ -227,7 +227,7 @@
           }
         },
         "status": "calculated",
-        "version": "1.0.0"
+        "version": "1.1.0"
       },
       "function": "issue_report",
       "input": {
@@ -623,6 +623,114 @@
         "trace_id": "${trace_review2}"
       },
       "name": "provenance of the correction review"
+    },
+    {
+      "expected": {
+        "error": {
+          "code": "SUPERSEDED"
+        },
+        "status": "refused",
+        "version": "1.1.0"
+      },
+      "function": "issue_report",
+      "input": {
+        "revision_id": "${rev1}"
+      },
+      "name": "refuse issuing the superseded original"
+    },
+    {
+      "capture": {
+        "report2": "/result/report_id"
+      },
+      "expected": {
+        "output_sha256": "<sha256>",
+        "result": {
+          "bridge_scope": "matched_accounts_only",
+          "changes": {
+            "actual_expenses": "0.00",
+            "actual_noi": "10.00",
+            "actual_revenue": "10.00",
+            "budget_expenses": "0.00",
+            "budget_noi": "0.00",
+            "budget_revenue": "0.00",
+            "expense_variance": "0.00",
+            "noi_variance": "10.00",
+            "revenue_variance": "10.00",
+            "unmapped_actual": "0.00",
+            "unmapped_budget": "0.00"
+          },
+          "contract_version": "plat.ops/1",
+          "correction_reason": "June accrual posted to May",
+          "currency": "USD",
+          "excluded_accounts": [],
+          "expense_convention": "positive_costs",
+          "human_approval": "not_granted",
+          "input_sha256": "<sha256>",
+          "issued_at": "<timestamp>",
+          "period": "2026-05",
+          "property": "Synthetic Oak",
+          "report_id": "<id>",
+          "revision_id": "<id=rev2>",
+          "snapshot": {
+            "as_of_date": "2026-05-31",
+            "concessions_amount": null,
+            "delinquent_amount": null,
+            "down_units": 0,
+            "in_place_rent_total": null,
+            "market_rent_total": "100.10",
+            "occupied_units": 9,
+            "prepaid_amount": null,
+            "vacant_units": 1
+          },
+          "sources": {
+            "canonical_json_sha256": "14a73d9139b19a13c9e5471c932876dcd9ada780f41d4e81dedd5fee4f07ab33"
+          },
+          "status": "calculated",
+          "supersedes_revision": "<id=rev1>",
+          "unit_count": 10,
+          "variance": {
+            "by_account": [
+              {
+                "account_code": "4000",
+                "account_name": "Rental Income",
+                "actual": "110.10",
+                "budget": "90.05",
+                "category": "rental income",
+                "variance": "20.05"
+              },
+              {
+                "account_code": "5000",
+                "account_name": "Payroll",
+                "actual": "30.00",
+                "budget": "25.00",
+                "category": "payroll",
+                "variance": "5.00"
+              }
+            ],
+            "noi_bridge": {
+              "actual_expenses": "30.00",
+              "actual_noi": "80.10",
+              "actual_revenue": "110.10",
+              "budget_expenses": "25.00",
+              "budget_noi": "65.05",
+              "budget_revenue": "90.05",
+              "expense_variance": "5.00",
+              "noi_variance": "15.05",
+              "revenue_variance": "20.05",
+              "unmapped_actual": "0.00",
+              "unmapped_budget": "0.00"
+            },
+            "review_reasons": []
+          }
+        },
+        "status": "calculated",
+        "version": "1.1.0"
+      },
+      "function": "issue_report",
+      "input": {
+        "revision_id": "${rev2}"
+      },
+      "name": "issue report for the correction"
     }
   ]
 }

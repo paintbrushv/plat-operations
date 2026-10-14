@@ -209,3 +209,68 @@ async fn coverage_uses_account_codes_and_preserves_complete_totals() {
         "ACCOUNT_MAPPING_CONFLICT"
     );
 }
+
+/// `issue` checks for a successor, reviews and inserts inside one immediate
+/// transaction. The race it closes (a correction committed by another
+/// connection between the check and the insert) is not deterministically
+/// testable from a unit test, so this pins the observable ordering instead:
+/// the latest revision issues, a correction then makes the old id refuse
+/// `SUPERSEDED` with nothing stored on it, and every refusal rolls back so the
+/// same single-connection pool still issues afterwards.
+#[tokio::test]
+async fn issue_runs_in_a_transaction_and_refuses_a_superseded_revision() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = store::create(&tmp.path().join("cents.sqlite"))
+        .await
+        .unwrap();
+    let data = dataset();
+    let first = store::import(&pool, &data, None, None, &serde_json::json!({}))
+        .await
+        .unwrap();
+    // The latest revision issues, and an unknown id rolls back cleanly.
+    store::issue(&pool, &first).await.unwrap();
+    assert_eq!(
+        store::issue(&pool, "no-such-revision")
+            .await
+            .unwrap_err()
+            .code,
+        "NOT_FOUND"
+    );
+
+    let mut correction = data.clone();
+    correction.actuals[0].amount = "100.12".parse::<Money>().unwrap();
+    let second = store::import(
+        &pool,
+        &correction,
+        Some(&first),
+        Some("Synthetic two-cent correction"),
+        &serde_json::json!({}),
+    )
+    .await
+    .unwrap();
+    let reports = |id: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM exact_reports WHERE revision_id=?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(reports(first.clone()).await, 1);
+
+    let refusal = store::issue(&pool, &first).await.unwrap_err();
+    assert_eq!(refusal.code, "SUPERSEDED");
+    assert_eq!(
+        refusal.message,
+        format!("Revision {first} (revision 1) is superseded; the latest is {second} (revision 2)")
+    );
+    assert_eq!(reports(first.clone()).await, 1);
+    assert_eq!(reports(second.clone()).await, 0);
+
+    // The refusals left no transaction open: the latest still issues, twice.
+    store::issue(&pool, &second).await.unwrap();
+    store::issue(&pool, &second).await.unwrap();
+    assert_eq!(reports(second).await, 2);
+}

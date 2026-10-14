@@ -662,7 +662,7 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
     // every failure but a refusal before the server acted may have issued
     // the report.
     assert!(js.contains(
-        r#""This revision has been superseded by " + ids.join(", ") + " in the loaded list. A report issued here records the superseded figures.""#
+        r#""This revision has been superseded by " + ids.join(", ") + " in the loaded list. The engine will refuse to issue a report for it (SUPERSEDED); issue the latest revision instead.""#
     ));
     assert!(js.contains("state.known[k].parent_id === id"));
     assert_eq!(js.matches("supersededNote(later)").count(), 2);
@@ -1257,12 +1257,13 @@ async fn issuing_a_report_is_listed_and_a_second_issue_makes_another() {
     assert_eq!(listed(app).await.as_array().unwrap().len(), 2);
 }
 
-/// What the review screen's superseded warning documents: the engine does not
-/// refuse `issue_report` on a revision a correction has superseded. It stores
-/// the report on the old revision, and `t12` with `issued_only` then reads
-/// that revision's figures, not the correction's.
+/// What the review screen's superseded warning documents: the engine refuses
+/// `issue_report` on a revision a correction has superseded, with `SUPERSEDED`
+/// and a message naming the latest revision, and stores no report. `t12` with
+/// `issued_only` finds no issued revision for the chain until the latest is
+/// issued, and then uses it.
 #[tokio::test]
-async fn issuing_a_superseded_revision_succeeds_and_t12_issued_only_uses_it() {
+async fn issuing_a_superseded_revision_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("exact.sqlite");
     let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
@@ -1316,8 +1317,9 @@ async fn issuing_a_superseded_revision_succeeds_and_t12_issued_only_uses_it() {
         .to_owned();
     assert_ne!(new_id, old_id);
 
-    // The superseded revision still issues: 200, and the report is stored on it.
-    let issued = send(
+    // The superseded revision is refused: the code, and a message naming
+    // both revisions by id and revision number. Nothing is stored.
+    let refused = send(
         &app,
         calc(
             "issue_report",
@@ -1327,39 +1329,79 @@ async fn issuing_a_superseded_revision_succeeds_and_t12_issued_only_uses_it() {
         ),
     )
     .await;
-    assert_eq!(issued.status, StatusCode::OK, "{}", issued.json());
-    let report_id = issued.json()["result"]["report_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let listed = send(&app, calc("list_revisions", None, origin, &json!({}))).await;
-    assert_eq!(listed.status, StatusCode::OK, "{}", listed.json());
-    let listed = listed.json();
-    let rows = listed["result"]["revisions"].as_array().unwrap();
+    let refusal = refused.json();
+    assert_eq!(refusal["status"], "refused", "{refusal}");
+    assert_eq!(refusal["error"]["code"], "SUPERSEDED");
+    assert_eq!(
+        refusal["error"]["message"],
+        format!(
+            "Revision {old_id} (revision 1) is superseded; the latest is {new_id} (revision 2)"
+        )
+    );
+    let revisions = || {
+        let app = app.clone();
+        async move {
+            let listed = send(&app, calc("list_revisions", None, origin, &json!({}))).await;
+            assert_eq!(listed.status, StatusCode::OK, "{}", listed.json());
+            listed.json()["result"]["revisions"].clone()
+        }
+    };
+    let rows = revisions().await;
+    let rows = rows.as_array().unwrap();
     assert_eq!(rows.len(), 2);
     let find = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap();
     assert_eq!(find(&new_id)["parent_id"], old_id.as_str());
-    assert_eq!(find(&old_id)["reports"].as_array().unwrap().len(), 1);
-    assert_eq!(find(&old_id)["reports"][0]["id"], report_id.as_str());
+    assert_eq!(find(&old_id)["reports"], json!([]));
     assert_eq!(find(&new_id)["reports"], json!([]));
 
-    // t12 on the issued-only policy uses the superseded revision's figures;
-    // the default policy uses the correction's.
+    // t12 on the issued-only policy finds no issued revision for the chain;
+    // the default policy uses the correction.
     let t12 = |policy: &str| {
         let app = app.clone();
         let input = json!({"property": "Synthetic Oak", "end_period": "2026-05", "revision_policy": policy});
-        async move {
-            let reply = send(&app, calc("t12", None, origin, &input)).await;
-            assert_eq!(reply.status, StatusCode::OK, "{}", reply.json());
-            reply.json()["result"].clone()
-        }
+        async move { send(&app, calc("t12", None, origin, &input)).await }
     };
-    let issued_only = t12("issued_only").await;
+    let none_issued = t12("issued_only").await;
+    assert_eq!(
+        none_issued.json()["error"]["code"],
+        "NOT_FOUND",
+        "{}",
+        none_issued.json()
+    );
     let latest = t12("latest").await;
-    assert_eq!(issued_only["revisions"][11]["revision_id"], old_id.as_str());
-    assert_eq!(latest["revisions"][11]["revision_id"], new_id.as_str());
-    assert_ne!(
-        issued_only["actuals"]["noi"][11],
-        latest["actuals"]["noi"][11]
+    assert_eq!(latest.status, StatusCode::OK, "{}", latest.json());
+    assert_eq!(
+        latest.json()["result"]["revisions"][11]["revision_id"],
+        new_id.as_str()
+    );
+
+    // The latest revision issues, repeat issuing makes another report, and
+    // the issued-only policy then uses the correction.
+    for _ in 0..2 {
+        let issued = send(
+            &app,
+            calc(
+                "issue_report",
+                None,
+                origin,
+                &json!({"revision_id": new_id}),
+            ),
+        )
+        .await;
+        assert_eq!(issued.status, StatusCode::OK, "{}", issued.json());
+        // These files carry no occupancy snapshot, so the revision is
+        // `review_required`, and it still issues.
+        assert_eq!(issued.json()["status"], "review_required");
+    }
+    let rows = revisions().await;
+    let rows = rows.as_array().unwrap();
+    let find = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap();
+    assert_eq!(find(&old_id)["reports"], json!([]));
+    assert_eq!(find(&new_id)["reports"].as_array().unwrap().len(), 2);
+    let issued_only = t12("issued_only").await;
+    assert_eq!(issued_only.status, StatusCode::OK, "{}", issued_only.json());
+    assert_eq!(
+        issued_only.json()["result"]["revisions"][11]["revision_id"],
+        new_id.as_str()
     );
 }
