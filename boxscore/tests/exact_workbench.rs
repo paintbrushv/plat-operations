@@ -39,6 +39,8 @@ fn keyed_config(database: Option<PathBuf>) -> Config {
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: false,
         loopback_port: None,
+        api_keys: true,
+        browser_oauth: None,
     }
 }
 
@@ -465,7 +467,12 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
     assert_eq!(css, workbench::APP_CSS);
 
     for (name, text) in [("index.html", &html), ("app.js", &js), ("app.css", &css)] {
-        let lower = text.to_ascii_lowercase();
+        // The two `new URL(` (the authorize request and the redirect URI's
+        // origin, pinned by page_sign_in_follows_the_pkce_rules) are not a
+        // CSS `url(`.
+        let lower = text
+            .to_ascii_lowercase()
+            .replace("new url(", "new-url-constructor");
         for banned in [
             "innerhtml",
             "outerhtml",
@@ -504,6 +511,7 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
     }
     assert!(js.contains(r#"request("POST", "v1/calc/" + name, input, timeout)"#));
     assert!(js.contains(r#"request("GET", ".well-known/oauth-protected-resource")"#));
+    assert!(js.contains(r#"request("GET", "workbench/auth.json")"#));
 
     // A pasted key is checked before it is stored: printable ASCII only.
     assert!(js.contains(r"var KEY_CHARS = /^[\x21-\x7e]+$/;"));
@@ -679,9 +687,458 @@ fn page_sources_build_the_dom_without_markup_or_external_urls() {
     assert!(js.contains(r#""(list reload superseded; press Reload)""#));
     assert!(js.contains("state.queued = { id: id, note: loaded };"));
 
-    // Under 72 KB together. Raised from 64 KB for slice 3's issue flow (the
-    // superseded warning, the failure caveat and the queued selection).
-    assert!(html.len() + js.len() + css.len() < 72 * 1024);
+    // Under 88 KB together. Raised from 64 KB for slice 3's issue flow (the
+    // superseded warning, the failure caveat and the queued selection), then
+    // from 72 KB for sign-in through the identity provider (PKCE, the code
+    // exchange, expiry and sign-out).
+    assert!(html.len() + js.len() + css.len() < 88 * 1024);
+}
+
+/// Sign-in through the identity provider: what the page sends, keeps and
+/// navigates to. The flow itself runs against the mock IdP in
+/// exact_mcp_http_oauth.rs and against Keycloak by hand (docs).
+#[test]
+fn page_sign_in_follows_the_pkce_rules() {
+    let js = source("app.js");
+    let lower = js.to_ascii_lowercase();
+
+    // One navigation, to a URL whose base is auth.json's
+    // authorization_endpoint; it is the only URL the page builds from data.
+    // The other `new URL(` only reads the redirect URI's origin, which is
+    // compared, never navigated to or fetched.
+    assert_eq!(js.matches("location.assign(").count(), 1);
+    assert!(js.contains("      window.location.assign(url.toString());\n"));
+    assert_eq!(js.matches("new URL(").count(), 2);
+    assert!(js.contains("      var url = new URL(auth.authorization_endpoint);\n"));
+    assert!(js.contains("      return new URL(raw).origin;\n"));
+    assert_eq!(js.matches("originOf(").count(), 2);
+    // Sign-in starts only at the redirect URI's origin (127.0.0.1 is not
+    // localhost): the answer lands there, with this tab's state or not at all.
+    assert!(js.contains("    if (originOf(auth.redirect_uri) !== window.location.origin) {\n"));
+    assert!(js.contains(
+        r#"showSignIn("Sign-in works only at " + text(auth.redirect_uri) + "; open the workbench there.");"#
+    ));
+    assert_eq!(js.matches("location.href").count(), 0);
+    assert_eq!(js.matches("location.replace(").count(), 0);
+    assert_eq!(js.matches("window.open(").count(), 0);
+    // `auth` there is state.auth, which only the auth.json answer sets: no
+    // envelope, result or other server body reaches the sign-in code.
+    assert_eq!(js.matches("state.auth = ").count(), 1);
+    assert!(js.contains(
+        r#"if (!res.failure && res.status === 200 && res.body && typeof res.body.mode === "string") state.auth = res.body;"#
+    ));
+    let sign_in = section(&js, "  function signIn() {", "\n  }\n");
+    assert!(sign_in.contains("var auth = state.auth;"));
+    for banned in [
+        "envelope", "result", "res.", "body", "token", "load(", "getKey",
+    ] {
+        assert!(!sign_in.contains(banned), "signIn uses {banned}");
+    }
+    // Exactly the authorize parameters (authorizeParams, which
+    // scripts/workbench_unit_test.mjs also runs), set through
+    // URLSearchParams.
+    assert!(sign_in.contains(
+        "authorizeParams(auth, nonce, encodeChallenge(hash)).forEach(function (p) { q.set(p[0], p[1]); });"
+    ));
+    assert_eq!(js.matches("q.set(").count(), 1);
+    let params = section(
+        &js,
+        "  function authorizeParams(auth, nonce, challenge) {",
+        "\n  }\n",
+    );
+    let pairs: Vec<&str> = params
+        .lines()
+        .filter(|l| l.trim_start().starts_with("[\""))
+        .map(|l| l.trim().trim_end_matches(','))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            r#"["response_type", "code"]"#,
+            r#"["client_id", auth.client_id]"#,
+            r#"["redirect_uri", auth.redirect_uri]"#,
+            r#"["scope", auth.scope]"#,
+            r#"["state", nonce]"#,
+            r#"["code_challenge", challenge]"#,
+            r#"["code_challenge_method", "S256"]"#,
+            r#"["resource", auth.audience]"#,
+        ]
+    );
+    assert_eq!(js.matches("searchParams").count(), 1);
+    assert!(!lower.contains("\"plain\""));
+
+    // PKCE: a 64-character verifier from crypto.getRandomValues over 64
+    // unreserved characters, S256 by crypto.subtle.digest, base64url.
+    assert!(js.contains("var verifier = randomString(64);"));
+    assert!(js.contains("window.crypto.getRandomValues(bytes);"));
+    assert!(js.contains("out += UNRESERVED.charAt(bytes[i] & 63);"));
+    assert!(js.contains(
+        r#"var UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";"#
+    ));
+    assert!(js
+        .contains(r#"window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))"#));
+    assert!(js.contains(r#".replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")"#));
+    assert!(!lower.contains("math.random"));
+
+    // The answer: any query with a code or an error leaves the address bar
+    // and history before anything else (before the sign-in settings or the
+    // state are looked at), the pending entry is dropped whatever happens,
+    // and classifyCallback decides: no state, another tab's state, no
+    // pending entry or an iss (RFC 9207) from another issuer is a mismatch.
+    let classify = section(
+        &js,
+        "  function classifyCallback(params, pending, issuer, now) {",
+        "\n  }\n",
+    );
+    assert!(classify.contains(r#"if (!params.has("state") || !pending || typeof pending.state !== "string" || pending.state !== params.get("state")) {"#));
+    assert!(classify.contains(
+        r#"if (params.has("iss") && issuerId(params.get("iss")) !== issuerId(issuer)) {"#
+    ));
+    assert_eq!(classify.matches("message: MISMATCH").count(), 2);
+    assert!(js.contains(r#"return text(value).replace(/\/+$/, "");"#));
+    assert!(
+        js.contains(r#"var MISMATCH = "Sign-in response did not match this tab; start again.";"#)
+    );
+    assert!(js.contains("window.history.replaceState(null, \"\", window.location.pathname);"));
+    let finish = section(&js, "  function finishSignIn() {", "\n  }\n");
+    assert!(finish.contains(
+        r#"    if (!params.has("code") && !params.has("error")) return Promise.resolve("");"#
+    ));
+    let cleaned = finish.find("history.replaceState").unwrap();
+    for later in [
+        "loadJson(PENDING_STORAGE)",
+        "canSignIn()",
+        "classifyCallback(",
+        "exchange(",
+    ] {
+        assert!(cleaned < finish.find(later).unwrap(), "{later}");
+    }
+    assert!(
+        finish.find(r#"save(PENDING_STORAGE, "");"#).unwrap() < finish.find("canSignIn()").unwrap()
+    );
+    // A callback while auth.json is unavailable says so.
+    assert!(finish.contains("if (!canSignIn()) return Promise.resolve(UNAVAILABLE);"));
+    assert!(js.contains(r#"var UNAVAILABLE = "Sign-in could not be completed because the server's sign-in settings could not be loaded; start again.";"#));
+
+    // The exchange: a form POST to auth.json's token endpoint, no secret,
+    // no cookies, the verifier in the body only.
+    let exchange = section(&js, "  function exchange(code, verifier) {", "\n  }\n");
+    assert!(exchange.contains("return window.fetch(auth.token_endpoint, {"));
+    for field in [
+        r#"form.set("grant_type", "authorization_code");"#,
+        r#"form.set("code", code);"#,
+        r#"form.set("redirect_uri", auth.redirect_uri);"#,
+        r#"form.set("client_id", auth.client_id);"#,
+        r#"form.set("code_verifier", verifier);"#,
+    ] {
+        assert!(exchange.contains(field), "{field}");
+    }
+    assert_eq!(exchange.matches("form.set(").count(), 5);
+    assert!(exchange.contains(r#""Content-Type": "application/x-www-form-urlencoded""#));
+    assert!(exchange.contains(r#"credentials: "omit","#));
+    assert!(!lower.contains("client_secret"));
+    assert!(!lower.contains("refresh_token"));
+    assert_eq!(js.matches("code_verifier").count(), 1);
+    // The token is kept in sessionStorage with its expiry, and sent only as
+    // the bearer header (before the API key).
+    assert!(js.contains(r#"var TOKEN_STORAGE = "boxscore.workbench.oauthToken";"#));
+    assert!(js.contains(
+        "var stored = { access_token: token, expires_at: typeof life === \"number\" && life > 0 ? now + life * 1000 : null };"
+    ));
+    assert!(js.contains("var record = tokenRecord(body, Date.now());"));
+    assert!(js.contains(
+        "    var api = path.indexOf(\"v1/\") === 0;\n    var held = api ? signInState() : {};\n"
+    ));
+    assert!(js.contains("var bearer = api ? token || getKey() : \"\";"));
+    assert!(js.contains(r#"if (bearer) headers.Authorization = "Bearer " + bearer;"#));
+    // Expiry mid-session: once this tab's sign-in has expired (or the server
+    // refused its token), a request sends nothing, shows the sign-in panel
+    // and resolves as a 401 to the token; the API key is used only when no
+    // token was ever kept in this tab, or after Sign out.
+    let request = section(
+        &js,
+        "  function request(method, path, payload, timeout) {",
+        "\n  }\n",
+    );
+    let expired = request.find("    if (held.expired) {\n").unwrap();
+    assert!(expired < request.find("window.fetch(").unwrap());
+    assert!(expired < request.find("getKey()").unwrap());
+    assert!(request.contains("      showSignIn(EXPIRED);\n"));
+    assert!(request.contains(
+        "      return Promise.resolve({ status: 401, body: null, retryAfter: null, oauth: true, notSent: true });\n"
+    ));
+    assert!(request.contains("    var token = held.token || \"\";\n"));
+    assert!(js.contains(r#"if (res.notSent) return ["Nothing was sent. " + EXPIRED];"#));
+    assert!(js.contains("    if (stored.expired === true) return \"expired\";\n"));
+    assert!(js.contains(
+        "    if (typeof stored.expires_at === \"number\" && now >= stored.expires_at) return \"expired\";\n"
+    ));
+    assert!(js.contains(r#"save(TOKEN_STORAGE, JSON.stringify({ expired: true }));"#));
+    // Only Sign out removes the entry outright.
+    assert_eq!(js.matches(r#"save(TOKEN_STORAGE, "");"#).count(), 1);
+    let sign_out = section(&js, "  function signOut() {", "\n  }\n");
+    assert!(sign_out.contains(r#"save(TOKEN_STORAGE, "");"#));
+    assert!(js.contains(r#"$("signin-out").hidden = !t && !held.expired;"#));
+
+    // Under node only, the pure decisions are exported for
+    // scripts/workbench_unit_test.mjs and nothing is wired; a browser has no
+    // module object and never takes that branch.
+    assert_eq!(js.matches("module.exports").count(), 2);
+    let guard = js
+        .find("  if (typeof module !== \"undefined\" && module.exports && typeof document === \"undefined\") {\n    module.exports = {\n")
+        .expect("the export block, guarded");
+    let tail = &js[guard..];
+    let returned = tail.find("    return;\n  }\n").unwrap();
+    assert!(returned < tail.find("document.readyState").unwrap());
+    assert!(tail.ends_with("  else wire();\n})();\n"));
+    for helper in [
+        "tokenState: tokenState",
+        "tokenRecord: tokenRecord",
+        "classifyCallback: classifyCallback",
+        "authorizeParams: authorizeParams",
+    ] {
+        assert!(tail[..returned].contains(helper), "{helper}");
+    }
+    // No token, code or verifier near any URL, history entry or log.
+    for line in js.lines() {
+        let l = line.to_ascii_lowercase();
+        if l.contains("token") || l.contains("verifier") || l.contains("\"code\"") {
+            for sink in [
+                "new url(",
+                "location",
+                "replacestate",
+                "pushstate",
+                "console.",
+            ] {
+                assert!(
+                    !l.contains(sink) || l.trim_start().starts_with("//"),
+                    "{line}"
+                );
+            }
+        }
+    }
+    for banned in ["localstorage", "document.cookie", "console.", "pushstate"] {
+        assert!(!lower.contains(banned), "app.js contains {banned}");
+    }
+
+    // Expiry, 401 and 403: the messages the page shows.
+    assert!(js.contains(r#"var EXPIRED = "Your sign-in expired; sign in again.";"#));
+    assert!(js.contains("if (res.status === 401 && res.oauth) {"));
+    assert!(
+        js.contains(r#"if (res.status === 403 && error && error.code === "INSUFFICIENT_SCOPE") {"#)
+    );
+    assert!(js.contains("did not grant \" + requiredScope() + \" to this sign-in"));
+    assert!(js.contains("Your session at the identity provider is not ended"));
+    // The IdP's own error and description, as text.
+    assert!(js.contains(r#"idpError(params.get("error"), params.get("error_description"))"#));
+    assert!(js.contains(r#"$("signin-message").textContent = message || "";"#));
+    assert!(js.contains(r#"$("signin-start").addEventListener("click", signIn);"#));
+    assert!(js.contains(r#"$("signin-out").addEventListener("click", signOut);"#));
+}
+
+/// The text of `js` from `start` to the first `end` after it.
+fn section<'a>(js: &'a str, start: &str, end: &str) -> &'a str {
+    let at = js.find(start).unwrap_or_else(|| panic!("no {start}"));
+    let len = js[at..]
+        .find(end)
+        .unwrap_or_else(|| panic!("no end after {start}"));
+    &js[at..at + len]
+}
+
+fn browser_oauth() -> mcp_http::BrowserOAuth {
+    mcp_http::BrowserOAuth {
+        issuer: "https://idp.example.test/realms/acme".into(),
+        client_id: "boxscore-workbench".into(),
+        authorization_endpoint: "https://idp.example.test/realms/acme/protocol/openid-connect/auth"
+            .into(),
+        token_endpoint: "https://IDP.example.test:8443/realms/acme/protocol/openid-connect/token"
+            .into(),
+        scope: "openid boxscore:calc".into(),
+        audience: PUBLIC_URL.into(),
+    }
+}
+
+#[tokio::test]
+async fn auth_json_reports_the_mode_with_the_page_headers() {
+    let oauth_only = Config {
+        oauth_enabled: true,
+        api_keys: false,
+        ..keyed_config(None)
+    };
+    let both = Config {
+        oauth_enabled: true,
+        ..keyed_config(None)
+    };
+    for (config, mode) in [
+        (loopback_config(3819), "none"),
+        (keyed_config(None), "api_key"),
+        (oauth_only.clone(), "oauth"),
+        (both.clone(), "api_key_or_oauth"),
+    ] {
+        let reply = send(&mcp_http::router(config), get("/workbench/auth.json")).await;
+        assert_page_headers(&reply, "application/json");
+        assert_eq!(reply.json(), json!({ "mode": mode }));
+    }
+
+    // With browser sign-in: everything the page needs, identifiers only.
+    for (config, mode) in [(oauth_only, "oauth"), (both, "api_key_or_oauth")] {
+        let app = mcp_http::router(Config {
+            browser_oauth: Some(browser_oauth()),
+            ..config
+        });
+        let reply = send(&app, get("/workbench/auth.json")).await;
+        assert_eq!(
+            reply.json(),
+            json!({
+                "mode": mode,
+                "issuer": "https://idp.example.test/realms/acme",
+                "authorization_endpoint": "https://idp.example.test/realms/acme/protocol/openid-connect/auth",
+                "token_endpoint": "https://IDP.example.test:8443/realms/acme/protocol/openid-connect/token",
+                "client_id": "boxscore-workbench",
+                "scope": "openid boxscore:calc",
+                "audience": PUBLIC_URL,
+                "redirect_uri": format!("{PUBLIC_URL}/"),
+            })
+        );
+        assert!(!String::from_utf8_lossy(&reply.body).contains(SECRET));
+    }
+    // Public and GET only, like the page.
+    let app = mcp_http::router(keyed_config(None));
+    let posted = send(
+        &app,
+        Request::post("/workbench/auth.json")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn connect_src_names_the_token_endpoint_url_only_with_browser_sign_in() {
+    // The exact token endpoint (host lowercased, port kept), not its origin:
+    // the rest of the identity provider's API stays out of the page's reach.
+    let with = CSP.replace(
+        "connect-src 'self'",
+        "connect-src 'self' https://idp.example.test:8443/realms/acme/protocol/openid-connect/token",
+    );
+    assert_eq!(
+        workbench::content_security_policy(Some(&browser_oauth())).unwrap(),
+        with.as_str()
+    );
+    assert_eq!(workbench::content_security_policy(None).unwrap(), CSP);
+    for (endpoint, source) in [
+        (
+            "https://idp.example.test:443/t",
+            Some("https://idp.example.test/t"),
+        ),
+        (
+            "http://127.0.0.1:8080/token",
+            Some("http://127.0.0.1:8080/token"),
+        ),
+        ("http://[::1]:8080/token", Some("http://[::1]:8080/token")),
+        (
+            "https://idp-1.example.test/o/token",
+            Some("https://idp-1.example.test/o/token"),
+        ),
+        // In the path, the characters that would end the directive, split
+        // the list or open a keyword are percent-encoded.
+        (
+            "https://idp.example.test/a;b,c'd/token",
+            Some("https://idp.example.test/a%3Bb%2Cc%27d/token"),
+        ),
+        // A WHATWG host may carry them: refused, never written into the header.
+        ("https://idp;x.example.test/token", None),
+        ("https://idp,x.example.test/token", None),
+        ("https://idp'x.example.test/token", None),
+        ("https://idp_x.example.test/token", None),
+        ("https://idp.example.test/token?tenant=x", None),
+        ("https://idp.example.test/token#x", None),
+        ("not a url", None),
+    ] {
+        assert_eq!(
+            workbench::token_endpoint_source(endpoint).as_deref(),
+            source,
+            "{endpoint}"
+        );
+    }
+    // Those hosts do parse (WHATWG), so the LDH check is what refuses them.
+    for host in ["idp;x", "idp,x", "idp'x"] {
+        let url = reqwest::Url::parse(&format!("https://{host}.example.test/token")).unwrap();
+        assert_eq!(
+            url.host_str(),
+            Some(format!("{host}.example.test").as_str())
+        );
+    }
+    // Such a host refuses to start, naming the rule.
+    let hostile = mcp_http::BrowserOAuth {
+        token_endpoint: "https://idp;x.example.test/token".into(),
+        ..browser_oauth()
+    };
+    let error = workbench::content_security_policy(Some(&hostile))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("cannot be named in the workbench page's connect-src: its host must be an IP address or DNS labels of ASCII letters, digits, '-' and '.'"),
+        "{error}"
+    );
+    let app = mcp_http::router(Config {
+        oauth_enabled: true,
+        browser_oauth: Some(browser_oauth()),
+        ..keyed_config(None)
+    });
+    for path in ["/", "/app.css", "/app.js", "/workbench/auth.json"] {
+        let reply = send(&app, get(path)).await;
+        assert_eq!(reply.header("content-security-policy"), with, "{path}");
+    }
+    let plain = mcp_http::router(keyed_config(None));
+    for path in ["/", "/workbench/auth.json"] {
+        let reply = send(&plain, get(path)).await;
+        assert_eq!(reply.header("content-security-policy"), CSP, "{path}");
+    }
+    // The page's own API calls are unchanged: the IdP origin is not allowed
+    // to call this server.
+    let reply = send(
+        &app,
+        calc(
+            "describe",
+            Some(SECRET),
+            Some("https://idp.example.test:8443"),
+            &json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn browser_client_id_needs_oauth() {
+    for options in [
+        ServeOptions {
+            oauth_browser_client_id: Some("boxscore-workbench".into()),
+            ..ServeOptions::default()
+        },
+        ServeOptions {
+            oauth_browser_client_id: Some("boxscore-workbench".into()),
+            authorization_servers: vec!["https://idp.example.test".into()],
+            ..ServeOptions::default()
+        },
+    ] {
+        let error = mcp_http::prepare(&options).unwrap_err().to_string();
+        assert!(
+            error.starts_with("--oauth-browser-client-id needs OAuth configured: --authorization-server with --oauth-audience, --oauth-client-id and --oauth-client-secret-file"),
+            "{error}"
+        );
+    }
+    let stray = ServeOptions {
+        oauth_token_endpoint: Some("https://idp.example.test/token".into()),
+        ..ServeOptions::default()
+    };
+    let error = mcp_http::prepare(&stray).unwrap_err().to_string();
+    assert!(
+        error.contains("only with --oauth-browser-client-id"),
+        "{error}"
+    );
 }
 
 /// Each `<form ...>` start tag in the page.
@@ -710,9 +1167,10 @@ fn page_has_the_import_and_trace_landmarks_and_no_form_target() {
     ] {
         assert!(html.contains(landmark), "index.html lacks {landmark}");
     }
-    // Panels in order: key, load a period, loaded data, review (its body,
-    // then the issue block after the citation), trace.
+    // Panels in order: sign-in, key, load a period, loaded data, review (its
+    // body, then the issue block after the citation), trace.
     let order: Vec<usize> = [
+        r#"id="signin-panel""#,
         r#"id="key-panel""#,
         r#"id="import-panel""#,
         r#"id="loaded""#,
@@ -756,6 +1214,9 @@ fn page_has_the_import_and_trace_landmarks_and_no_form_target() {
         "issue-confirm-yes",
         "issue-confirm-no",
         "issue-result",
+        "signin-start",
+        "signin-out",
+        "signin-message",
     ] {
         assert!(html.contains(&format!(r#"id="{id}""#)), "no {id}");
     }

@@ -107,6 +107,30 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "boxscore-workbench",
+      "name": "browser workbench sign-in (public client, authorization code with PKCE S256)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": [
+        "http://127.0.0.1:3819/"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:3819"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "boxscore:calc"
+      ]
     }
   ],
   "users": [

@@ -16,7 +16,8 @@ Least effort first. Only the first one needs IT.
 
 1. **Your firm's claude.ai or ChatGPT connector. Needs IT.** IT runs the
    server, connects it to your firm's sign-in and loads the data. You add the
-   connector in claude.ai or ChatGPT and sign in. IT's setup guide:
+   connector in claude.ai or ChatGPT and sign in (once IT registers it, the
+   server's browser page can use the same firm sign-in). IT's setup guide:
    [docs/connectors/remote-mcp.md](docs/connectors/remote-mcp.md). Its
    claude.ai and ChatGPT steps have not yet been tried with a real account,
    and that page says so.

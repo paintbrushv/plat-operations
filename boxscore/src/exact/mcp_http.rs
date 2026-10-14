@@ -11,10 +11,12 @@
 //!   body as its input and returns the envelope (200, or 422 when refused).
 //! - `GET /health`, `GET /openapi.json` and
 //!   `GET /.well-known/oauth-protected-resource` (RFC 9728) are public.
-//! - `GET /`, `GET /app.css` and `GET /app.js` serve the read-only browser
-//!   workbench ([`super::workbench`]), also public: the page itself holds no
-//!   data, and the `/v1/calc` calls it makes are authenticated like any
-//!   other. It is not part of `/openapi.json`.
+//! - `GET /`, `GET /app.css`, `GET /app.js` and `GET /workbench/auth.json`
+//!   serve the browser workbench ([`super::workbench`]), also public: the
+//!   page itself holds no data, and the `/v1/calc` calls it makes are
+//!   authenticated like any other. It is not part of `/openapi.json`. With
+//!   `--oauth-browser-client-id` the page signs in through the identity
+//!   provider itself; its access token is introspected like any other.
 //!
 //! Everything else needs `Authorization: Bearer <token>`, checked by a
 //! [`TokenValidator`]: [`StaticKeys`] (API keys for scripts) and, for
@@ -440,6 +442,32 @@ pub struct Config {
     /// The page served at `http://127.0.0.1:<port>/`, `http://localhost:<port>/`
     /// or `http://[::1]:<port>/` is then the server's own origin.
     pub loopback_port: Option<u16>,
+    /// `--api-key-file` is configured: static keys are accepted. With
+    /// `oauth_enabled`, it sets the workbench's `auth.json` mode.
+    pub api_keys: bool,
+    /// The workbench page signs in through the identity provider
+    /// (`--oauth-browser-client-id`); `None` when it does not.
+    pub browser_oauth: Option<BrowserOAuth>,
+}
+
+/// The workbench page's sign-in through the identity provider, as
+/// `GET /workbench/auth.json` reports it: a public client using the
+/// authorization code flow with PKCE. Identifiers and URLs only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserOAuth {
+    /// The issuer, without a trailing slash.
+    pub issuer: String,
+    /// The public client IT registered for the page, with the redirect URI
+    /// `<public-url>/`.
+    pub client_id: String,
+    /// From the issuer's RFC 8414 metadata.
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    /// What the page requests: `openid` and the scope this server requires.
+    pub scope: String,
+    /// What the page names as the RFC 8707 `resource`; the token's audience
+    /// must contain it.
+    pub audience: String,
 }
 
 impl std::fmt::Debug for Config {
@@ -454,6 +482,8 @@ impl std::fmt::Debug for Config {
             .field("scope", &self.scope)
             .field("oauth_enabled", &self.oauth_enabled)
             .field("loopback_port", &self.loopback_port)
+            .field("api_keys", &self.api_keys)
+            .field("browser_oauth", &self.browser_oauth)
             .finish()
     }
 }
@@ -478,6 +508,14 @@ pub struct ServeOptions {
     pub oauth_client_secret_file: Option<PathBuf>,
     pub oauth_audience: Option<String>,
     pub oauth_scope: Option<String>,
+    /// `--oauth-browser-client-id`: the public client the workbench page
+    /// signs in as. Needs the OAuth options above.
+    pub oauth_browser_client_id: Option<String>,
+    /// Not flags: the issuer's `authorization_endpoint` and
+    /// `token_endpoint`, which [`resolve`] reads from its RFC 8414 metadata
+    /// when `oauth_browser_client_id` is set (tests may set them).
+    pub oauth_authorization_endpoint: Option<String>,
+    pub oauth_token_endpoint: Option<String>,
 }
 
 impl Default for ServeOptions {
@@ -495,6 +533,9 @@ impl Default for ServeOptions {
             oauth_client_secret_file: None,
             oauth_audience: None,
             oauth_scope: None,
+            oauth_browser_client_id: None,
+            oauth_authorization_endpoint: None,
+            oauth_token_endpoint: None,
         }
     }
 }
@@ -606,6 +647,32 @@ pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartErro
     let scope = oauth
         .as_ref()
         .map_or_else(|| SCOPE.to_string(), |o| o.scope.clone());
+    let browser_oauth = match oauth
+        .as_ref()
+        .and_then(|o| o.browser.as_ref().map(|b| (o, b)))
+    {
+        None => None,
+        Some((oauth, browser)) => {
+            let (Some(authorization_endpoint), Some(token_endpoint)) =
+                (&browser.authorization_endpoint, &browser.token_endpoint)
+            else {
+                return Err(StartError::new(
+                    "--oauth-browser-client-id needs the issuer's authorization_endpoint and token_endpoint: start through serve, which reads them from the issuer's metadata",
+                ));
+            };
+            Some(BrowserOAuth {
+                issuer: oauth.issuer.clone(),
+                client_id: browser.client_id.clone(),
+                authorization_endpoint: authorization_endpoint.to_string(),
+                token_endpoint: token_endpoint.to_string(),
+                scope: format!("openid {}", oauth.scope),
+                audience: oauth.audience.clone(),
+            })
+        }
+    };
+    // The page's header is built with the router; refuse here what it could
+    // not carry.
+    workbench::content_security_policy(browser_oauth.as_ref())?;
     let mut allowed_origins = Vec::new();
     for raw in &options.allow_origins {
         let origin = normalize_origin(raw).ok_or_else(|| {
@@ -641,28 +708,45 @@ pub fn prepare(options: &ServeOptions) -> Result<(SocketAddr, Config), StartErro
             oauth_enabled: oauth.is_some(),
             // Port 0 is replaced by the bound port in `serve`.
             loopback_port: addr.ip().is_loopback().then_some(addr.port()),
+            api_keys: options.api_key_file.is_some(),
+            browser_oauth,
         },
     ))
 }
 
-/// [`prepare`], after discovering the introspection endpoint from the
-/// issuer's `/.well-known/oauth-authorization-server` when OAuth is
-/// configured without `--introspection-endpoint`. Inconsistent flags and an
-/// unreadable client secret are refused before any network call; metadata
-/// without an `introspection_endpoint` refuses to start.
+/// [`prepare`], after discovering from the issuer's
+/// `/.well-known/oauth-authorization-server` the introspection endpoint
+/// when OAuth is configured without `--introspection-endpoint`, and the
+/// authorization and token endpoints when `--oauth-browser-client-id` is
+/// set. Inconsistent flags and an unreadable client secret are refused
+/// before any network call; metadata without an endpoint it needs, or with
+/// one that is not https (http for a loopback host), refuses to start.
 pub async fn resolve(options: &ServeOptions) -> Result<(SocketAddr, Config), StartError> {
-    prepare(&with_introspection_endpoint(options).await?)
+    prepare(&with_discovered_endpoints(options).await?)
 }
 
-/// `options`, with `introspection_endpoint` discovered when OAuth is
-/// configured without one.
-async fn with_introspection_endpoint(options: &ServeOptions) -> Result<ServeOptions, StartError> {
+/// `options`, with the endpoints [`resolve`] describes filled in from one
+/// metadata fetch.
+async fn with_discovered_endpoints(options: &ServeOptions) -> Result<ServeOptions, StartError> {
     let mut options = options.clone();
     if let Some(oauth) = oauth::OAuthOptions::from_serve(&options)? {
-        if oauth.introspection_endpoint.is_none() {
+        let introspection = oauth.introspection_endpoint.is_none();
+        let browser = oauth
+            .browser
+            .as_ref()
+            .is_some_and(|b| b.authorization_endpoint.is_none() || b.token_endpoint.is_none());
+        if introspection || browser {
             oauth.client_secret()?;
-            let endpoint = oauth::discover_introspection_endpoint(&oauth.issuer).await?;
-            options.introspection_endpoint = Some(endpoint.to_string());
+            let found = oauth::discover(&oauth.issuer, introspection, browser).await?;
+            if let Some(endpoint) = found.introspection_endpoint {
+                options.introspection_endpoint = Some(endpoint.to_string());
+            }
+            if let (Some(authorize), Some(token)) =
+                (found.authorization_endpoint, found.token_endpoint)
+            {
+                options.oauth_authorization_endpoint = Some(authorize.to_string());
+                options.oauth_token_endpoint = Some(token.to_string());
+            }
         }
     }
     Ok(options)
@@ -698,6 +782,11 @@ pub fn router(config: Config) -> Router {
         same_origins: same_origins(&config),
         config,
     });
+    // Checked by `prepare`; a config built otherwise falls back to the
+    // strict `self`-only policy, which only stops the page's sign-in.
+    let csp = workbench::content_security_policy(state.config.browser_oauth.as_ref())
+        .unwrap_or_else(|_| HeaderValue::from_static(workbench::CONTENT_SECURITY_POLICY));
+    let auth = workbench::auth_document(&state.config);
     let protected = Router::new()
         .route(
             "/mcp",
@@ -711,7 +800,7 @@ pub fn router(config: Config) -> Router {
         .route("/openapi.json", get(openapi_document))
         .route(METADATA_PATH, get(resource_metadata))
         .route(METADATA_MCP_PATH, get(resource_metadata_mcp))
-        .merge(workbench::routes())
+        .merge(workbench::routes(csp, &auth))
         .merge(protected)
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
@@ -1537,7 +1626,7 @@ pub async fn serve(
     options: ServeOptions,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), StartError> {
-    let options = with_introspection_endpoint(&options).await?;
+    let options = with_discovered_endpoints(&options).await?;
     let (addr, mut config) = prepare(&options)?;
     let oauth = oauth::OAuthOptions::from_serve(&options)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -1569,6 +1658,12 @@ pub async fn serve(
         eprintln!(
             "boxscore-exact serve: OAuth issuer {}, introspection {endpoint}, audience {}, scope {}",
             oauth.issuer, oauth.audience, oauth.scope
+        );
+    }
+    if let Some(browser) = &config.browser_oauth {
+        eprintln!(
+            "boxscore-exact serve: workbench sign-in: OAuth via {} (client {})",
+            browser.issuer, browser.client_id
         );
     }
     let app = router(config);

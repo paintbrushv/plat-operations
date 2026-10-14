@@ -1,14 +1,21 @@
 //! OAuth 2.1 access-token validation on `boxscore-exact serve` (RFC 7662
 //! introspection). A mock authorization server runs as an axum router on an
 //! ephemeral loopback port: it counts introspection calls, checks the HTTP
-//! Basic client credentials and answers per token. The real `router` is
-//! driven with `oneshot`; two tests start the real binary. Synthetic data
-//! only.
+//! Basic client credentials and answers per token. For the browser
+//! workbench's sign-in it also has `authorize` and `token` endpoints: a
+//! public client's authorization code flow with PKCE (S256), as strict as a
+//! real IdP where it matters (a state is required, the redirect URI must be
+//! registered, a code is bound to its client and expires, and the token
+//! endpoint answers only a registered page origin, with CORS), whose access
+//! tokens its introspection then reports active. The real `router` is
+//! driven with `oneshot` or on a socket; three tests start the real binary.
+//! Synthetic data only.
 
 use axum::{
     body::{to_bytes, Body},
+    extract::Query,
     extract::State,
-    http::{HeaderMap, Request, StatusCode, Uri},
+    http::{header, HeaderMap, Request, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{self, get},
     Form, Json, Router,
@@ -43,6 +50,12 @@ const INACTIVE: &str = "synthetic-oauth-token-inactive";
 const EXPIRED: &str = "synthetic-oauth-token-expired";
 const WRONG_AUD: &str = "synthetic-oauth-token-wrong-audience";
 const NO_SCOPE: &str = "synthetic-oauth-token-no-scope";
+/// The public client the workbench page signs in as.
+const BROWSER_CLIENT: &str = "boxscore-workbench";
+/// Another public client of the mock IdP: its codes are not the page's.
+const OTHER_CLIENT: &str = "synthetic-other-public-client";
+/// How long a code can wait before it is redeemed, unless a test changes it.
+const CODE_TTL: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
 // Mock authorization server
@@ -63,6 +76,22 @@ struct MockState {
     /// Further GET documents by path (status, body); any other path is 404.
     documents: Mutex<HashMap<String, (u16, Value)>>,
     expected_authorization: String,
+    /// Authorization codes not yet redeemed.
+    codes: Mutex<HashMap<String, Grant>>,
+    issued: AtomicUsize,
+    /// Registered redirect URIs: `authorize` refuses any other.
+    redirect_uris: Mutex<Vec<String>>,
+    /// Page origins the token endpoint answers (CORS): any other is refused.
+    page_origins: Mutex<Vec<String>>,
+    code_ttl: Mutex<Duration>,
+}
+
+/// What `authorize` bound a code to.
+struct Grant {
+    client_id: String,
+    challenge: String,
+    redirect_uri: String,
+    issued_at: std::time::Instant,
 }
 
 struct Idp {
@@ -124,6 +153,165 @@ async fn introspect(
     }
 }
 
+fn oauth_error(error: &str, description: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": error, "error_description": description})),
+    )
+        .into_response()
+}
+
+/// RFC 4648 section 5 base64url without padding, as RFC 7636 uses it.
+fn base64url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..=chunk.len() {
+            out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+        }
+    }
+    out
+}
+
+fn s256(verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    base64url(&Sha256::digest(verifier.as_bytes()))
+}
+
+/// `GET /authorize`: no login screen; a request from a known public client
+/// with a registered redirect URI, a state and an S256 challenge is
+/// answered with a redirect to that URI carrying a fresh code and the
+/// state. An unregistered redirect URI is answered here, never followed.
+async fn authorize(
+    State(state): State<Arc<MockState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let param = |name: &str| query.get(name).cloned().unwrap_or_default();
+    if param("response_type") != "code"
+        || ![BROWSER_CLIENT, OTHER_CLIENT].contains(&param("client_id").as_str())
+    {
+        return oauth_error("unauthorized_client", "unknown client or response type");
+    }
+    if !state
+        .redirect_uris
+        .lock()
+        .unwrap()
+        .contains(&param("redirect_uri"))
+    {
+        return oauth_error("invalid_request", "redirect_uri is not registered");
+    }
+    if param("state").is_empty() {
+        return oauth_error("invalid_request", "state is required");
+    }
+    if param("code_challenge_method") != "S256" || param("code_challenge").len() != 43 {
+        return oauth_error("invalid_request", "PKCE with S256 is required");
+    }
+    if param("scope").split(' ').all(|s| s != "boxscore:calc") {
+        return oauth_error("invalid_scope", "boxscore:calc was not requested");
+    }
+    let n = state.issued.fetch_add(1, Ordering::SeqCst);
+    let code = format!("synthetic-code-{n}");
+    state.codes.lock().unwrap().insert(
+        code.clone(),
+        Grant {
+            client_id: param("client_id"),
+            challenge: param("code_challenge"),
+            redirect_uri: param("redirect_uri"),
+            issued_at: std::time::Instant::now(),
+        },
+    );
+    let mut location = reqwest::Url::parse(&param("redirect_uri")).unwrap();
+    location
+        .query_pairs_mut()
+        .append_pair("code", &code)
+        .append_pair("state", &param("state"));
+    (
+        StatusCode::FOUND,
+        [(header::LOCATION, location.to_string())],
+    )
+        .into_response()
+}
+
+/// `POST /token`: from a registered page origin only (answered with
+/// `Access-Control-Allow-Origin` for it), a public client (no client
+/// authentication) redeems a code once, within the code TTL, as the client
+/// it was issued to, with the verifier whose S256 is the challenge
+/// `authorize` saw and the same redirect URI. The access token is then
+/// active at introspection with this server's audience and scope.
+async fn token(
+    State(state): State<Arc<MockState>>,
+    headers: HeaderMap,
+    form: Form<HashMap<String, String>>,
+) -> Response {
+    let origin = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if !state.page_origins.lock().unwrap().contains(&origin) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "invalid_request", "error_description": "origin not allowed"})),
+        )
+            .into_response();
+    }
+    let mut response = redeem(&state, &headers, &form);
+    let headers = response.headers_mut();
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
+    headers.insert(header::VARY, "Origin".parse().unwrap());
+    response
+}
+
+fn redeem(
+    state: &MockState,
+    headers: &HeaderMap,
+    Form(form): &Form<HashMap<String, String>>,
+) -> Response {
+    let param = |name: &str| form.get(name).cloned().unwrap_or_default();
+    if headers.contains_key("authorization") || form.contains_key("client_secret") {
+        return oauth_error("invalid_client", "the browser client is public");
+    }
+    if param("grant_type") != "authorization_code"
+        || ![BROWSER_CLIENT, OTHER_CLIENT].contains(&param("client_id").as_str())
+    {
+        return oauth_error("unauthorized_client", "unknown client or grant type");
+    }
+    let Some(grant) = state.codes.lock().unwrap().remove(&param("code")) else {
+        return oauth_error("invalid_grant", "unknown or used code");
+    };
+    if grant.client_id != param("client_id") {
+        return oauth_error("invalid_grant", "the code was issued to another client");
+    }
+    if grant.issued_at.elapsed() >= *state.code_ttl.lock().unwrap() {
+        return oauth_error("invalid_grant", "the code has expired");
+    }
+    if grant.redirect_uri != param("redirect_uri") {
+        return oauth_error("invalid_grant", "redirect_uri does not match");
+    }
+    if s256(&param("code_verifier")) != grant.challenge {
+        return oauth_error("invalid_grant", "PKCE verification failed");
+    }
+    let access_token = format!("synthetic-browser-token-{}", param("code"));
+    let mut granted = active("alice", unix_now() + 300);
+    granted["client_id"] = json!(BROWSER_CLIENT);
+    state
+        .replies
+        .lock()
+        .unwrap()
+        .insert(access_token.clone(), Reply::Json(granted));
+    Json(json!({
+        "access_token": access_token, "token_type": "Bearer", "expires_in": 300,
+        "scope": "openid boxscore:calc",
+    }))
+    .into_response()
+}
+
 async fn metadata(State(state): State<Arc<MockState>>) -> Json<Value> {
     Json(state.metadata.lock().unwrap().clone())
 }
@@ -151,9 +339,16 @@ impl Idp {
             })),
             documents: Mutex::new(HashMap::new()),
             expected_authorization: basic(CLIENT_ID, CLIENT_SECRET),
+            codes: Mutex::new(HashMap::new()),
+            issued: AtomicUsize::new(0),
+            redirect_uris: Mutex::new(vec![format!("{PUBLIC_URL}/")]),
+            page_origins: Mutex::new(vec![PUBLIC_URL.to_string()]),
+            code_ttl: Mutex::new(CODE_TTL),
         });
         let app = Router::new()
             .route("/introspect", routing::post(introspect))
+            .route("/authorize", get(authorize))
+            .route("/token", routing::post(token))
             .route("/.well-known/oauth-authorization-server", get(metadata))
             .fallback(document)
             .with_state(state.clone());
@@ -537,6 +732,8 @@ async fn introspection_has_a_timeout() {
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: true,
         loopback_port: None,
+        api_keys: false,
+        browser_oauth: None,
     });
     let started = std::time::Instant::now();
     let answer = ping_with(&app, "synthetic-slow-token").await;
@@ -645,6 +842,8 @@ fn app_with(idp: &Idp, settings: IntrospectionSettings) -> Router {
         scope: mcp_http::SCOPE.into(),
         oauth_enabled: true,
         loopback_port: None,
+        api_keys: false,
+        browser_oauth: None,
     })
 }
 
@@ -1354,4 +1553,499 @@ async fn real_socket_unreachable_introspection_is_503_and_logs_no_token() {
     assert!(failures[0].contains("connection failed"), "{log}");
     assert!(!log.contains(ACTIVE), "no token in the log: {log}");
     assert!(!log.contains(CLIENT_SECRET), "{log}");
+}
+
+// ---------------------------------------------------------------------------
+// Browser workbench sign-in (authorization code with PKCE)
+// ---------------------------------------------------------------------------
+
+fn browser_options(idp: &Idp, dir: &Path) -> ServeOptions {
+    ServeOptions {
+        oauth_browser_client_id: Some(BROWSER_CLIENT.into()),
+        ..oauth_options(idp, dir)
+    }
+}
+
+#[tokio::test]
+async fn browser_sign_in_discovers_its_endpoints_or_refuses_to_start() {
+    let idp = Idp::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let options = browser_options(&idp, dir.path());
+
+    // prepare does not discover: the endpoints come from the metadata.
+    let error = refusal(&options);
+    assert!(
+        error.contains("needs the issuer's authorization_endpoint and token_endpoint"),
+        "{error}"
+    );
+    // resolve reads them even though --introspection-endpoint is given.
+    let (_, config) = mcp_http::resolve(&options).await.unwrap();
+    assert_eq!(
+        config.browser_oauth,
+        Some(mcp_http::BrowserOAuth {
+            issuer: idp.base.clone(),
+            client_id: BROWSER_CLIENT.into(),
+            authorization_endpoint: format!("{}/authorize", idp.base),
+            token_endpoint: format!("{}/token", idp.base),
+            scope: "openid boxscore:calc".into(),
+            audience: AUDIENCE.into(),
+        })
+    );
+    // A configured scope is the one requested.
+    let mut custom = options.clone();
+    custom.oauth_scope = Some("boxscore:custom".into());
+    let (_, config) = mcp_http::resolve(&custom).await.unwrap();
+    assert_eq!(
+        config.browser_oauth.unwrap().scope,
+        "openid boxscore:custom"
+    );
+
+    // Each endpoint must be present and https (http for loopback only).
+    let good = idp.state.metadata.lock().unwrap().clone();
+    for (field, value, expected) in [
+        (
+            "authorization_endpoint",
+            None,
+            "it has no authorization_endpoint",
+        ),
+        ("token_endpoint", None, "it has no token_endpoint"),
+        (
+            "authorization_endpoint",
+            Some("http://idp.example.test/authorize"),
+            "authorization_endpoint in the authorization server metadata must be https",
+        ),
+        (
+            "token_endpoint",
+            Some("http://idp.example.test/token"),
+            "token_endpoint in the authorization server metadata must be https",
+        ),
+        (
+            "token_endpoint",
+            Some("https://idp.example.test/token?tenant=x"),
+            "token_endpoint in the authorization server metadata must not carry",
+        ),
+    ] {
+        let mut metadata = good.clone();
+        match value {
+            None => {
+                metadata.as_object_mut().unwrap().remove(field);
+            }
+            Some(value) => metadata[field] = json!(value),
+        }
+        *idp.state.metadata.lock().unwrap() = metadata;
+        let error = mcp_http::resolve(&options).await.unwrap_err().to_string();
+        assert!(error.contains(expected), "{field}: {error}");
+        assert!(
+            error.contains("--oauth-browser-client-id needs the issuer's metadata"),
+            "{error}"
+        );
+    }
+    // With the introspection endpoint discovered too, a missing browser
+    // endpoint points at the metadata, not at --introspection-endpoint.
+    let mut discovering = options.clone();
+    discovering.introspection_endpoint = None;
+    let mut metadata = good.clone();
+    metadata
+        .as_object_mut()
+        .unwrap()
+        .remove("authorization_endpoint");
+    *idp.state.metadata.lock().unwrap() = metadata;
+    let error = mcp_http::resolve(&discovering)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("it has no authorization_endpoint"),
+        "{error}"
+    );
+    assert!(
+        error.contains("check the identity provider's authorization server metadata"),
+        "{error}"
+    );
+    assert!(!error.contains("pass --introspection-endpoint"), "{error}");
+
+    // PKCE: advertised methods must include S256; absent is accepted.
+    for (methods, accepted) in [
+        (json!(["S256", "plain"]), true),
+        (json!(["S256"]), true),
+        (json!(["plain"]), false),
+        (json!([]), false),
+        (json!("S256"), false),
+    ] {
+        let mut metadata = good.clone();
+        metadata["code_challenge_methods_supported"] = methods.clone();
+        *idp.state.metadata.lock().unwrap() = metadata;
+        match mcp_http::resolve(&options).await {
+            Ok(_) => assert!(accepted, "{methods}"),
+            Err(error) => {
+                assert!(!accepted, "{methods}: {error}");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("code_challenge_methods_supported does not include S256"),
+                    "{error}"
+                );
+            }
+        }
+    }
+    *idp.state.metadata.lock().unwrap() = good.clone();
+    assert!(mcp_http::resolve(&options).await.is_ok());
+
+    // Without the browser client, an explicit introspection endpoint still
+    // needs no metadata at all.
+    idp.state
+        .metadata
+        .lock()
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .clear();
+    let mut plain = options.clone();
+    plain.oauth_browser_client_id = None;
+    let (_, config) = mcp_http::resolve(&plain).await.unwrap();
+    assert!(config.browser_oauth.is_none());
+
+    // The flag is valid only with OAuth configured, and is one client id.
+    let mut no_audience = options.clone();
+    no_audience.oauth_audience = None;
+    assert!(refusal(&no_audience).starts_with("--oauth-browser-client-id needs OAuth configured"));
+    let mut no_secret = options.clone();
+    no_secret.oauth_client_secret_file = None;
+    assert!(refusal(&no_secret).starts_with("--oauth-browser-client-id needs OAuth configured"));
+    let mut spaced = options.clone();
+    spaced.oauth_browser_client_id = Some("two words".into());
+    assert!(refusal(&spaced).contains("--oauth-browser-client-id must be"));
+}
+
+/// The page's flow, by hand over HTTP: auth.json from the real router, the
+/// mock's authorize redirect, the code exchange with the verifier, then the
+/// token on `/mcp` and `/v1/calc`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browser_sign_in_code_exchange_over_http() {
+    let idp = Idp::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let mut options = browser_options(&idp, dir.path());
+    options.public_url = Some(server.clone());
+    options.introspection_endpoint = None;
+    // What IT registers for the page: its redirect URI and web origin.
+    *idp.state.redirect_uris.lock().unwrap() = vec![format!("{server}/")];
+    *idp.state.page_origins.lock().unwrap() = vec![server.clone()];
+    let (_, config) = mcp_http::resolve(&options).await.unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mcp_http::router(config))
+            .await
+            .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let page = client.get(format!("{server}/")).send().await.unwrap();
+    let csp = page.headers()["content-security-policy"].to_str().unwrap();
+    assert!(
+        csp.contains(&format!("connect-src 'self' {}/token; ", idp.base)),
+        "{csp}"
+    );
+    let auth: Value = client
+        .get(format!("{server}/workbench/auth.json"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(auth["mode"], "oauth");
+    assert_eq!(auth["redirect_uri"], format!("{server}/"));
+    assert_eq!(auth["client_id"], BROWSER_CLIENT);
+    let field = |name: &str| auth[name].as_str().unwrap().to_string();
+
+    // What the page does on "Sign in": a verifier, its S256 challenge, a
+    // state, and the authorize URL built on auth.json's endpoint. `changed`
+    // replaces (or, with "", drops) one parameter, for the mock's refusals.
+    let authorize_with = |verifier: &str, state: &str, changed: (&str, &str)| {
+        let mut url = reqwest::Url::parse(&field("authorization_endpoint")).unwrap();
+        let challenge = s256(verifier);
+        let (client_id, redirect_uri, scope, audience) = (
+            field("client_id"),
+            field("redirect_uri"),
+            field("scope"),
+            field("audience"),
+        );
+        let pairs = [
+            ("response_type", "code"),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("scope", scope.as_str()),
+            ("state", state),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("resource", audience.as_str()),
+        ];
+        for (name, value) in pairs {
+            let value = if name == changed.0 { changed.1 } else { value };
+            if !value.is_empty() {
+                url.query_pairs_mut().append_pair(name, value);
+            }
+        }
+        url
+    };
+    let authorize_url = |verifier: &str, state: &str| authorize_with(verifier, state, ("", ""));
+    let redirected = |response: reqwest::Response| {
+        assert_eq!(response.status().as_u16(), 302);
+        let location =
+            reqwest::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+        let mut landing = location.clone();
+        landing.set_query(None);
+        assert_eq!(landing.as_str(), format!("{server}/"));
+        let pairs: HashMap<String, String> = location.query_pairs().into_owned().collect();
+        (location, pairs)
+    };
+    let exchange_from = |code: String, verifier: String, origin: Option<String>| {
+        let client = client.clone();
+        let (token_endpoint, redirect_uri) = (field("token_endpoint"), field("redirect_uri"));
+        async move {
+            let mut post = client.post(token_endpoint);
+            if let Some(origin) = origin {
+                post = post.header("origin", origin);
+            }
+            post.form(&[
+                ("grant_type", "authorization_code"),
+                ("code", code.as_str()),
+                ("redirect_uri", redirect_uri.as_str()),
+                ("client_id", BROWSER_CLIENT),
+                ("code_verifier", verifier.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap()
+        }
+    };
+    let exchange =
+        |code: String, verifier: String| exchange_from(code, verifier, Some(server.clone()));
+
+    let verifier = "synthetic-pkce-verifier-0123456789abcdefghijklmnopqrstuvwxyz-_ABCD";
+    assert_eq!(verifier.len(), 66);
+    let response = client
+        .get(authorize_url(verifier, "synthetic-state-1"))
+        .send()
+        .await
+        .unwrap();
+    let (location, pairs) = redirected(response);
+    assert_eq!(pairs["state"], "synthetic-state-1");
+    // The redirect lands on the page itself, query and all.
+    let landed = client.get(location.clone()).send().await.unwrap();
+    assert_eq!(landed.status().as_u16(), 200);
+    assert_eq!(landed.headers()["referrer-policy"], "no-referrer");
+
+    let granted = exchange(pairs["code"].clone(), verifier.to_string()).await;
+    assert_eq!(granted.status().as_u16(), 200);
+    // CORS for the page's origin, as a browser needs to read the answer.
+    assert_eq!(
+        granted.headers()["access-control-allow-origin"],
+        server.as_str()
+    );
+    let granted: Value = granted.json().await.unwrap();
+    assert_eq!(granted["token_type"], "Bearer");
+    assert!(granted.get("refresh_token").is_none());
+    let token = granted["access_token"].as_str().unwrap().to_string();
+
+    // The token completes initialize and a /v1/calc call, from the page's
+    // own origin; introspected once, then cached.
+    let init: Value = client
+        .post(format!("{server}/mcp"))
+        .bearer_auth(&token)
+        .header("accept", ACCEPT)
+        .header("origin", &server)
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                      "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                 "clientInfo": {"name": "workbench-pkce-test", "version": "0"}}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        init["result"]["serverInfo"]["name"], "boxscore-exact",
+        "{init}"
+    );
+    let described = client
+        .post(format!("{server}/v1/calc/describe"))
+        .bearer_auth(&token)
+        .header("origin", &server)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(described.status().as_u16(), 200);
+    let described: Value = described.json().await.unwrap();
+    assert_eq!(described["status"], "calculated", "{described}");
+    assert_eq!(idp.calls(), 1);
+
+    // The code is single use.
+    let reused = exchange(pairs["code"].clone(), verifier.to_string()).await;
+    assert_eq!(reused.status().as_u16(), 400);
+
+    // A wrong verifier is refused by the IdP, and what comes back is the
+    // IdP's own error, which the page shows as text.
+    let response = client
+        .get(authorize_url(verifier, "synthetic-state-2"))
+        .send()
+        .await
+        .unwrap();
+    let (_, pairs) = redirected(response);
+    let refused = exchange(
+        pairs["code"].clone(),
+        "synthetic-wrong-verifier-0123456789abcdefghijklmnopqrstuvwxyz".to_string(),
+    )
+    .await;
+    assert_eq!(refused.status().as_u16(), 400);
+    let refused: Value = refused.json().await.unwrap();
+    assert_eq!(
+        refused,
+        json!({"error": "invalid_grant", "error_description": "PKCE verification failed"})
+    );
+    // The mock is strict where a real IdP is, so the flow above proves the
+    // page's requests are right. An unregistered redirect URI (localhost
+    // for 127.0.0.1, say) is answered at the IdP, never redirected to.
+    let localhost = server.replace("127.0.0.1", "localhost") + "/";
+    let unregistered = client
+        .get(authorize_with(
+            verifier,
+            "synthetic-state-3",
+            ("redirect_uri", &localhost),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unregistered.status().as_u16(), 400);
+    assert!(unregistered.headers().get("location").is_none());
+    let unregistered: Value = unregistered.json().await.unwrap();
+    assert_eq!(
+        unregistered["error_description"],
+        "redirect_uri is not registered"
+    );
+    // A request without state is refused.
+    let stateless = client
+        .get(authorize_with(verifier, "", ("", "")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stateless.status().as_u16(), 400);
+    assert!(stateless.headers().get("location").is_none());
+    // The token endpoint answers the page's origin only, with no CORS
+    // header for any other.
+    for origin in [None, Some("https://elsewhere.example.test".to_string())] {
+        let response = client
+            .get(authorize_url(verifier, "synthetic-state-4"))
+            .send()
+            .await
+            .unwrap();
+        let (_, pairs) = redirected(response);
+        let refused = exchange_from(pairs["code"].clone(), verifier.to_string(), origin).await;
+        assert_eq!(refused.status().as_u16(), 403);
+        assert!(refused
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+    }
+    // A code is bound to the client it was issued to.
+    let response = client
+        .get(authorize_with(
+            verifier,
+            "synthetic-state-5",
+            ("client_id", OTHER_CLIENT),
+        ))
+        .send()
+        .await
+        .unwrap();
+    let (_, pairs) = redirected(response);
+    let refused: Value = exchange(pairs["code"].clone(), verifier.to_string())
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused["error_description"],
+        "the code was issued to another client"
+    );
+    // A code expires.
+    *idp.state.code_ttl.lock().unwrap() = Duration::ZERO;
+    let response = client
+        .get(authorize_url(verifier, "synthetic-state-6"))
+        .send()
+        .await
+        .unwrap();
+    let (_, pairs) = redirected(response);
+    let refused: Value = exchange(pairs["code"].clone(), verifier.to_string())
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(refused["error_description"], "the code has expired");
+    *idp.state.code_ttl.lock().unwrap() = CODE_TTL;
+
+    // A token the IdP never issued is still the 401 challenge.
+    let unknown = client
+        .post(format!("{server}/v1/calc/describe"))
+        .bearer_auth("synthetic-browser-token-never-issued")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status().as_u16(), 401);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_socket_browser_sign_in_banner_and_auth_json() {
+    let idp = Idp::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let secret = private_file(dir.path(), "client-secret", CLIENT_SECRET);
+    let mut args = oauth_args(&idp, &secret);
+    args.extend([
+        "--oauth-browser-client-id".to_string(),
+        BROWSER_CLIENT.to_string(),
+    ]);
+    let served = start_serve(args).await;
+    let base = served.base.clone();
+    let auth: Value = reqwest::get(format!("{base}/workbench/auth.json"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(auth["mode"], "oauth");
+    assert_eq!(auth["redirect_uri"], format!("{base}/"));
+    assert_eq!(auth["token_endpoint"], format!("{}/token", idp.base));
+    let log = served.stop().await;
+    assert!(
+        log.contains(&format!(
+            "boxscore-exact serve: workbench sign-in: OAuth via {} (client {BROWSER_CLIENT})\n",
+            idp.base
+        )),
+        "{log}"
+    );
+    assert!(!log.contains(CLIENT_SECRET), "{log}");
+
+    // Without OAuth the flag refuses to start, naming the rule.
+    let refused = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
+        .args([
+            "serve",
+            "--bind",
+            "127.0.0.1:0",
+            "--oauth-browser-client-id",
+            BROWSER_CLIENT,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("--oauth-browser-client-id needs OAuth configured"),
+        "{stderr}"
+    );
 }

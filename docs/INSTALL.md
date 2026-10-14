@@ -291,8 +291,22 @@ and hash and never changes the first. The page then shows the new report id,
 the hash and the citation line, whose Look up button opens the trace, with
 its Report section.
 
-Signing in with OAuth from the browser is not supported; use an API key, or
-the agent connectors.
+On a shared deployment with OAuth, the page can sign analysts in through
+the firm's identity provider instead: IT registers a public client for the
+page (authorization code with PKCE `S256`, redirect URI `<public-url>/`, the
+page's origin allowed on the token endpoint, the `boxscore:calc` scope with
+the server's audience) and starts `serve` with
+`--oauth-browser-client-id <id>` next to the OAuth flags. The page then shows
+**Sign in with your firm's identity provider**, goes to the IdP's sign-in
+page and back, and keeps the access token in that tab's session storage
+until it expires (the next request after that is not sent and the page asks
+to sign in again; no refresh token is kept). Open the page at the redirect
+URI's origin exactly (`127.0.0.1` and `localhost` are different origins),
+and give it an origin no other web app shares. **Sign out** forgets it in
+that tab and does not end the IdP session. When
+the server also has a key file, the key form stays available beside it. The
+steps, what goes where, and a verified Keycloak run are in
+[remote-mcp.md, Browser workbench sign-in](connectors/remote-mcp.md#browser-workbench-sign-in).
 The page is served from the binary on the same port, loads nothing from
 elsewhere, and is not part of `/openapi.json`. Open it at the URL the
 server prints (`workbench at ...`): the API answers the page only from the

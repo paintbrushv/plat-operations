@@ -40,6 +40,26 @@ directories are gitignored — keep it that way.
   under the token's SHA-256. See
   [docs/DATA_FLOW.md](docs/DATA_FLOW.md#4-what-leaves-the-host).
 
+  With `--oauth-browser-client-id`, the browser workbench signs analysts in
+  through the same identity provider as a public client (authorization code
+  with PKCE `S256`, no client secret in the page). The browser talks to the
+  provider's authorization and token endpoints itself; the server only
+  publishes them in `/workbench/auth.json`, names the token endpoint's
+  exact URL (not its origin) in the page's `connect-src`, and introspects
+  the resulting token like any other. The verifier, `state` and access
+  token live in the tab's `sessionStorage` only (never `localStorage`, a
+  cookie, the console or a URL), the code is removed from the address bar
+  before anything else, and the answer's `state` (and `iss`, RFC 9207, when
+  present) must match. No refresh token is kept: expiry is handled on the
+  next request, which is not sent; the page asks to sign in again and never
+  falls back to an API key meanwhile. `sessionStorage` is shared with every
+  page on the same origin, so give the workbench an origin of its own; a
+  duplicated tab inherits the token, and signing out in one tab does not
+  sign out the other. Signing out of the page does not end the session at
+  the identity provider. The authorize request carries `resource=<audience>`
+  (RFC 8707), which strict identity providers accept only as an absolute
+  URI, so make `--oauth-audience` one.
+
   Any bearer token that the static API key list does not match is forwarded
   to the introspection endpoint, so a mistyped or revoked API key reaches
   the identity provider. If that matters to you, run API keys and OAuth on

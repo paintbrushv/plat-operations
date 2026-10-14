@@ -26,7 +26,7 @@ Each claim is marked with how it is backed:
 | question | answer | backed by |
 |---|---|---|
 | Does it listen on a port? | Not by default. No `EXPOSE`; the default command and every subcommand except `serve` open no socket. `serve` listens only when you start it, refuses a non-loopback address without an API key file or OAuth configuration, and the documented setup publishes it to host loopback only. See section 4. | [CI] every other check runs with `--network none`; the `serve` check publishes to `127.0.0.1` only; [tests]; [stated] |
-| Does it connect out? | No telemetry, no update check, no crash reporting. One exception, only when you configure OAuth on `serve`: it calls your identity provider's token introspection endpoint to check bearer tokens that are not API keys (and, without `--introspection-endpoint`, reads the provider's metadata once at start-up). Nothing else. | [CI] every check except `serve` runs with `--network none`; [tests]; [stated] |
+| Does it connect out? | No telemetry, no update check, no crash reporting. One exception, only when you configure OAuth on `serve`: it calls your identity provider's token introspection endpoint to check bearer tokens that are not API keys (and, without `--introspection-endpoint` or with `--oauth-browser-client-id`, reads the provider's metadata once at start-up). With `--oauth-browser-client-id` the analyst's browser also talks to the provider directly to sign in; the server does not. Nothing else. | [CI] every check except `serve` runs with `--network none`; [tests]; [stated] |
 | Where is data stored? | One SQLite file you name, on the `/data` volume, mode 0600, which also holds the invocation trace. Without a database, a JSONL trace file (mode 0600) only if you set `BOXSCORE_TRACE_DIR`. | [CI] for the database; [tests] and [stated] for the trace file |
 | What else does it write? | Nothing. The root filesystem can be read-only. | [CI] runs with `--read-only`, `serve` included |
 | Does it run as root? | No: uid/gid 65532. No shell in the image. | [CI] |
@@ -203,8 +203,8 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   needs root on the host (INSTALL.md does that with `chown`)]
 - `/health`, `/openapi.json`, the OAuth protected-resource metadata
   (`/.well-known/oauth-protected-resource` and its `/mcp` variant) and the
-  workbench page (`/`, `/app.css`, `/app.js`) answer without
-  authentication. With a validator, everything else (`/mcp`,
+  workbench page (`/`, `/app.css`, `/app.js`, `/workbench/auth.json`)
+  answer without authentication. With a validator, everything else (`/mcp`,
   `/v1/calc/{function}`) needs `Authorization: Bearer <token>`: an API key or
   an OAuth access token. A missing or refused token gets `401` with a
   `WWW-Authenticate` challenge; an OAuth token without the required scope
@@ -248,10 +248,30 @@ server for the catalog (MCP Streamable HTTP and a JSON API; see
   server over that same connection (in an `import_period` request body, 2 MiB
   at most, never stored by the page) or issue a report for a revision after a
   confirmation (an `issue_report` call on the same route and connection; the
-  server stores the report and it is sent nowhere); it does not
-  support OAuth sign-in (use an API key, or the agent connectors). [tests:
+  server stores the report and it is sent nowhere). [tests:
   `boxscore/tests/exact_workbench.rs`; CI: the `serve` check fetches `/`
   and its Content-Security-Policy]
+- **Workbench sign-in through the identity provider** (only with
+  `--oauth-browser-client-id`). The browser, not the server, then also talks
+  to the identity provider directly: it navigates to the provider's
+  authorization endpoint (carrying the public client id, redirect URI
+  `<public-url>/`, scope, a random `state`, the PKCE `code_challenge` and
+  `resource`), the user signs in there, and the provider sends the browser
+  back to `<public-url>/?code=...&state=...`. The page removes that query from
+  the address bar and history at once, then POSTs the code and the PKCE
+  verifier to the provider's token endpoint (no client secret, no cookies)
+  and receives an access token, which it keeps in the tab's
+  `sessionStorage` with its expiry and sends only as the bearer to this
+  server. Refresh tokens are not kept. The page's Content-Security-Policy
+  names the token endpoint's exact URL (scheme, host, port, path) in
+  `connect-src`, so no other path at the provider is reachable from the
+  page, and nothing else is added. The server's own outbound calls are unchanged: the metadata read at
+  start-up (which now also takes the authorization and token endpoints) and
+  introspection; it never sees the code or the verifier, and checks the
+  page's token by introspection like any other. [tests:
+  `boxscore/tests/exact_workbench.rs`, `boxscore/tests/exact_mcp_http_oauth.rs`;
+  verified against Keycloak 26.0.8 with the page in jsdom
+  (connectors/remote-mcp.md, Browser workbench sign-in)]
 - It speaks plain HTTP. Terminate TLS at a reverse proxy in front of it.
   [stated]
 - The database path comes from its command line, never from a request.
@@ -272,9 +292,10 @@ stated: `boxscore/src/exact/oauth.rs`]
   static API keys, and no cached verdict for that token is still valid
   (accepted tokens are cached until their expiry, at most 5 minutes;
   refused ones for 30 seconds). API key requests, requests without a token
-  and public routes never cause one. Without `--introspection-endpoint`, the
-  server also reads the issuer's RFC 8414 metadata at start-up to find the
-  endpoint (one `GET`, or two when an issuer with a path serves it only at
+  and public routes never cause one. Without `--introspection-endpoint`, or
+  with `--oauth-browser-client-id`, the server also reads the issuer's
+  RFC 8414 metadata at start-up to find the endpoints (one `GET`, or two
+  when an issuer with a path serves it only at
   `<issuer>/.well-known/oauth-authorization-server`), and none afterwards.
 - **What is sent:** the bearer token, `token_type_hint=access_token`, and the
   server's own client id and secret (HTTP Basic). No request body, tool

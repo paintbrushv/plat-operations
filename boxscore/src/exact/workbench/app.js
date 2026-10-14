@@ -9,6 +9,17 @@
 // - Every value from the server is untrusted text. The DOM is built with
 //   createElement and textContent only; nothing is parsed as markup.
 // - The API key lives in sessionStorage only and is sent as a bearer token.
+// - Sign-in through the identity provider (when workbench/auth.json offers
+//   it) is the authorization code flow with PKCE, the page as a public
+//   client: the verifier, state and access token live in sessionStorage
+//   only, the authorize request is the only URL built from data (its base is
+//   auth.json's authorization_endpoint), the code leaves the address bar at
+//   once, and no refresh token is kept: when the token expires the page asks
+//   to sign in again, and sends nothing (not even under an API key) until
+//   the analyst does or signs out. Nothing is logged.
+// - The sign-in decisions (tokenState, tokenRecord, classifyCallback,
+//   authorizeParams) are pure; under node (scripts/workbench_unit_test.mjs)
+//   the file exports them and wires nothing.
 (function () {
   "use strict";
 
@@ -16,6 +27,17 @@
   // An import reads, parses and stores up to 2 MiB, so it waits longer.
   var IMPORT_TIMEOUT_MS = 60000;
   var KEY_STORAGE = "boxscore.workbench.apiKey";
+  var TOKEN_STORAGE = "boxscore.workbench.oauthToken";
+  var PENDING_STORAGE = "boxscore.workbench.oauthPending";
+  // A sign-in answered later than this (10 minutes) is refused.
+  var PENDING_MAX_MS = 600000;
+  // 64 unreserved characters (RFC 7636), so a random byte & 63 picks one
+  // without bias.
+  var UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  var EXPIRED = "Your sign-in expired; sign in again.";
+  var MISMATCH = "Sign-in response did not match this tab; start again.";
+  var STALE = "The sign-in took too long; start again.";
+  var UNAVAILABLE = "Sign-in could not be completed because the server's sign-in settings could not be loaded; start again.";
   // The server's cap on one request body, in bytes (2 MiB): the files of an
   // import must fit in it as JSON, escaping included.
   var MAX_FILE_BYTES = 2097152;
@@ -65,7 +87,8 @@
   var state = {
     selected: null, reviewSeq: 0, listSeq: 0, importSeq: 0, issueSeq: 0, traceSeq: 0,
     known: {}, adapters: [], adaptersKey: "", fields: { files: [], options: [] },
-    confirm: null, busy: false, issue: null, issueConfirm: null, issuing: false, queued: null, listOk: false
+    confirm: null, busy: false, issue: null, issueConfirm: null, issuing: false, queued: null, listOk: false,
+    auth: { mode: "unknown" }
   };
 
   function has(object, key) {
@@ -273,39 +296,325 @@
 
   // ---------------------------------------------------------------- key
 
-  function getKey() {
+  function load(name) {
     try {
-      return window.sessionStorage.getItem(KEY_STORAGE) || "";
+      return window.sessionStorage.getItem(name) || "";
     } catch (e) {
       return "";
     }
   }
 
-  function setKey(value) {
+  // Store (or, with "", remove) one sessionStorage entry; false if refused.
+  function save(name, value) {
     try {
-      if (value) window.sessionStorage.setItem(KEY_STORAGE, value);
-      else window.sessionStorage.removeItem(KEY_STORAGE);
+      if (value) window.sessionStorage.setItem(name, value);
+      else window.sessionStorage.removeItem(name);
+      return true;
     } catch (e) {
-      setStatus("This browser refused session storage; the key cannot be kept.", true);
+      setStatus("This browser refused session storage; nothing can be kept for this tab.", true);
+      return false;
     }
+  }
+
+  function loadJson(name) {
+    try {
+      var value = JSON.parse(load(name) || "null");
+      return value && typeof value === "object" ? value : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function getKey() {
+    return load(KEY_STORAGE);
+  }
+
+  function setKey(value) {
+    save(KEY_STORAGE, value);
   }
 
   function showKeyPanel() {
     $("key-panel").hidden = false;
   }
 
+  // ---------------------------------------------------------------- sign-in
+
+  // The sign-in this tab holds: { token } while it is valid; { expired:
+  // true } once it ran out or the server refused it, until the analyst signs
+  // in again or signs out (the token itself is dropped at once); {} when
+  // there was none, the only case in which an API key is sent.
+  function signInState() {
+    var t = loadJson(TOKEN_STORAGE);
+    var kept = tokenState(t, Date.now());
+    if (kept === "expired") {
+      if (t.expired !== true) markExpired();
+      return { expired: true };
+    }
+    return kept === "valid" ? { token: t.access_token } : {};
+  }
+
+  // Forget the token but remember that this tab was signed in, so no request
+  // falls back to the API key.
+  function markExpired() {
+    save(TOKEN_STORAGE, JSON.stringify({ expired: true }));
+  }
+
+  function canSignIn() {
+    return typeof state.auth.authorization_endpoint === "string" && typeof state.auth.token_endpoint === "string";
+  }
+
+  function requiredScope() {
+    var scopes = text(state.auth.scope).split(" ").filter(function (s) { return s !== "openid"; });
+    return state.auth.scope && scopes.length ? scopes.join(" ") : "boxscore:calc";
+  }
+
+  // The sign-in panel: the button, or Sign out while signed in. Sign out
+  // also shows after expiry: it is how a tab goes back to its API key.
+  function showSignIn(message) {
+    var held = signInState();
+    var t = held.token && loadJson(TOKEN_STORAGE);
+    $("signin-panel").hidden = false;
+    $("signin-start").hidden = !!t || !canSignIn();
+    $("signin-out").hidden = !t && !held.expired;
+    if (!message && t) {
+      message = "Signed in through " + text(state.auth.issuer) + (typeof t.expires_at === "number"
+        ? "; the sign-in expires at " + new Date(t.expires_at).toLocaleTimeString() + "."
+        : ".");
+    }
+    if (!message && !canSignIn()) {
+      message = "This server accepts tokens from your firm's identity provider, but no sign-in is registered for this page: ask IT, or use an API key or the agent connectors.";
+    }
+    $("signin-message").textContent = message || "";
+  }
+
+  // The panels auth.json calls for, with finishSignIn's message (shown
+  // even when auth.json offered no sign-in). api_key (or no answer): the
+  // key panel appears on a 401, as before.
+  function applyAuth(message) {
+    var expired = signInState().expired;
+    var mode = state.auth.mode;
+    if (message || mode === "oauth" || (mode === "api_key_or_oauth" && canSignIn())) showSignIn(message || (expired ? EXPIRED : ""));
+    if (mode === "api_key_or_oauth") showKeyPanel();
+  }
+
+  function randomString(length) {
+    var bytes = new Uint8Array(length);
+    window.crypto.getRandomValues(bytes);
+    var out = "";
+    for (var i = 0; i < length; i++) out += UNRESERVED.charAt(bytes[i] & 63);
+    return out;
+  }
+
+  function encodeChallenge(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var raw = "";
+    for (var i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+    return window.btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  // The origin of an absolute URL, or "" when it is not one.
+  function originOf(raw) {
+    try {
+      return new URL(raw).origin;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  // Leave for the identity provider: a 64-character PKCE verifier and its
+  // S256 challenge, a random state, both kept in this tab only. The URL's
+  // base is auth.json's authorization_endpoint; every parameter is set
+  // through URLSearchParams. Only from the redirect URI's own origin: the
+  // answer lands there, and only a tab of that origin holds the pending
+  // entry (sessionStorage is per origin).
+  function signIn() {
+    var auth = state.auth;
+    if (!canSignIn()) return;
+    if (originOf(auth.redirect_uri) !== window.location.origin) {
+      showSignIn("Sign-in works only at " + text(auth.redirect_uri) + "; open the workbench there.");
+      return;
+    }
+    if (!window.crypto || !window.crypto.subtle) {
+      setStatus("Sign-in needs a secure page: https, or a loopback address.", true);
+      return;
+    }
+    var verifier = randomString(64);
+    var nonce = randomString(32);
+    window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)).then(function (hash) {
+      if (!save(PENDING_STORAGE, JSON.stringify({ verifier: verifier, state: nonce, started_at: Date.now() }))) return;
+      var url = new URL(auth.authorization_endpoint);
+      var q = url.searchParams;
+      authorizeParams(auth, nonce, encodeChallenge(hash)).forEach(function (p) { q.set(p[0], p[1]); });
+      window.location.assign(url.toString());
+    }, function () {
+      setStatus("This browser could not compute the sign-in challenge.", true);
+    });
+  }
+
+  // Back from the identity provider with ?code (or ?error): take the query
+  // off the address bar and history before anything else, drop this tab's
+  // pending entry, check the answer (classifyCallback), then trade the code
+  // for a token. Resolves to a message for the sign-in panel ("" for none);
+  // never throws.
+  function finishSignIn() {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has("code") && !params.has("error")) return Promise.resolve("");
+    window.history.replaceState(null, "", window.location.pathname);
+    var pending = loadJson(PENDING_STORAGE);
+    save(PENDING_STORAGE, "");
+    if (!canSignIn()) return Promise.resolve(UNAVAILABLE);
+    var answer = classifyCallback(params, pending, state.auth.issuer, Date.now());
+    if (answer.kind !== "code") return Promise.resolve(answer.message);
+    setStatus("Finishing sign-in…");
+    return exchange(answer.code, answer.verifier);
+  }
+
+  // POST the code and verifier to the token endpoint (no client secret, no
+  // cookies). Resolves to "" when a token is stored, else the message.
+  function exchange(code, verifier) {
+    var auth = state.auth;
+    var form = new URLSearchParams();
+    form.set("grant_type", "authorization_code");
+    form.set("code", code);
+    form.set("redirect_uri", auth.redirect_uri);
+    form.set("client_id", auth.client_id);
+    form.set("code_verifier", verifier);
+    var controller = new AbortController();
+    var timer = window.setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
+    return window.fetch(auth.token_endpoint, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+      signal: controller.signal,
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      redirect: "error"
+    }).then(function (response) {
+      return response.json().then(null, function () { return null; }).then(function (body) {
+        body = body && typeof body === "object" ? body : {};
+        if (!response.ok || typeof body.error === "string") {
+          return idpError(body.error || "HTTP " + response.status, body.error_description);
+        }
+        var record = tokenRecord(body, Date.now());
+        if (!record.stored) return record.problem;
+        if (!save(TOKEN_STORAGE, JSON.stringify(record.stored))) return "The access token could not be kept in this tab.";
+        return "";
+      });
+    }, function () {
+      return "The identity provider's token endpoint could not be reached, or does not allow this page's origin (CORS).";
+    }).finally(function () {
+      window.clearTimeout(timer);
+    });
+  }
+
+  function signOut() {
+    save(TOKEN_STORAGE, "");
+    showSignIn("Signed out of this page. Your session at the identity provider is not ended: sign out there too on a shared computer.");
+    setStatus("Signed out.");
+  }
+
+  // ---------------------------------------------------------------- sign-in decisions
+
+  // Pure: no DOM, storage, clock or network (the caller passes `now`), so
+  // scripts/workbench_unit_test.mjs runs them under node --test.
+
+  // What the token record kept in this tab means at `now`: "none" (no
+  // sign-in; an API key may be sent), "valid", or "expired" (it ran out, or
+  // the server refused it). A record without expires_at (the identity
+  // provider sent no expires_in) lasts until the server refuses it.
+  function tokenState(stored, now) {
+    if (!stored || typeof stored !== "object") return "none";
+    if (stored.expired === true) return "expired";
+    if (typeof stored.access_token !== "string") return "none";
+    if (typeof stored.expires_at === "number" && now >= stored.expires_at) return "expired";
+    return "valid";
+  }
+
+  // The record to keep for a token endpoint's answer received at `now`:
+  // { stored } with the token and its expiry (now + expires_in), or
+  // { problem }.
+  function tokenRecord(body, now) {
+    var token = body.access_token;
+    if (typeof token !== "string" || !KEY_CHARS.test(token) || !/^bearer$/i.test(text(body.token_type))) {
+      return { problem: "The identity provider's answer carried no bearer access token." };
+    }
+    var life = body.expires_in;
+    var stored = { access_token: token, expires_at: typeof life === "number" && life > 0 ? now + life * 1000 : null };
+    return { stored: stored };
+  }
+
+  function idpError(error, description) {
+    return "The identity provider refused the sign-in: " + text(error) + (description ? ": " + text(description) : "");
+  }
+
+  // Trailing slashes off, so an issuer compares as the server records it.
+  function issuerId(value) {
+    return text(value).replace(/\/+$/, "");
+  }
+
+  // The answer on the redirect (URLSearchParams with code or error), against
+  // this tab's pending entry, the issuer and `now`: { kind: "code", code,
+  // verifier } to exchange, or { kind: "refused", message }. No state, a
+  // state that is not this tab's (or no pending entry: a replay), or an iss
+  // (RFC 9207) from another issuer is a mismatch; an entry older than 10
+  // minutes is stale; the identity provider's error is shown as text.
+  function classifyCallback(params, pending, issuer, now) {
+    if (!params.has("state") || !pending || typeof pending.state !== "string" || pending.state !== params.get("state")) {
+      return { kind: "refused", message: MISMATCH };
+    }
+    if (params.has("iss") && issuerId(params.get("iss")) !== issuerId(issuer)) {
+      return { kind: "refused", message: MISMATCH };
+    }
+    if (!(now - pending.started_at <= PENDING_MAX_MS)) {
+      return { kind: "refused", message: STALE };
+    }
+    if (params.has("error")) {
+      return { kind: "refused", message: idpError(params.get("error"), params.get("error_description")) };
+    }
+    return { kind: "code", code: params.get("code"), verifier: text(pending.verifier) };
+  }
+
+  // The authorize request's parameters, in order, from auth.json's fields:
+  // the code flow, PKCE with S256, and resource=<audience> (RFC 8707).
+  function authorizeParams(auth, nonce, challenge) {
+    return [
+      ["response_type", "code"],
+      ["client_id", auth.client_id],
+      ["redirect_uri", auth.redirect_uri],
+      ["scope", auth.scope],
+      ["state", nonce],
+      ["code_challenge", challenge],
+      ["code_challenge_method", "S256"],
+      ["resource", auth.audience]
+    ];
+  }
+
   // ---------------------------------------------------------------- HTTP
 
-  // Resolves to { status, body, retryAfter } or { failure, timedOut } and
-  // never throws.
+  // Resolves to { status, body, retryAfter, oauth } or { failure, timedOut }
+  // and never throws. Only the API (v1/...) is authenticated: the page's
+  // public documents (auth.json, the resource metadata) go without a bearer.
+  // After this tab's sign-in expired an API request is not sent: the
+  // sign-in panel shows and it resolves as a 401 to the token (notSent),
+  // never falling back to the API key.
   function request(method, path, payload, timeout) {
     timeout = timeout || TIMEOUT_MS;
+    var api = path.indexOf("v1/") === 0;
+    var held = api ? signInState() : {};
+    if (held.expired) {
+      showSignIn(EXPIRED);
+      return Promise.resolve({ status: 401, body: null, retryAfter: null, oauth: true, notSent: true });
+    }
     var controller = new AbortController();
     var timer = window.setTimeout(function () { controller.abort(); }, timeout);
     var headers = { Accept: "application/json" };
     if (payload !== undefined) headers["Content-Type"] = "application/json";
-    var key = getKey();
-    if (key) headers.Authorization = "Bearer " + key;
+    // The access token when signed in, else (never signed in, or signed
+    // out) the API key.
+    var token = held.token || "";
+    var bearer = api ? token || getKey() : "";
+    if (bearer) headers.Authorization = "Bearer " + bearer;
     return window.fetch(path, {
       method: method,
       headers: headers,
@@ -323,7 +632,7 @@
         } catch (e) {
           body = null;
         }
-        return { status: response.status, body: body, retryAfter: response.headers.get("Retry-After") };
+        return { status: response.status, body: body, retryAfter: response.headers.get("Retry-After"), oauth: !!token };
       });
     }, function (error) {
       var timedOut = !!error && error.name === "AbortError";
@@ -353,6 +662,7 @@
   // Lines describing a transport failure: status, code, message, Retry-After.
   function describeFailure(res) {
     if (res.failure) return [res.failure];
+    if (res.notSent) return ["Nothing was sent. " + EXPIRED];
     var lines = ["HTTP " + res.status];
     var error = res.body && res.body.error;
     if (error && typeof error === "object") {
@@ -361,9 +671,19 @@
     } else if (!res.body) {
       lines.push("The response was not JSON.");
     }
-    if (res.status === 401) {
-      lines.push(getKey() ? "The API key was not accepted. Paste another below." : "This server needs an API key. Paste it below.");
+    if (res.status === 401 && res.oauth) {
+      markExpired();
+      lines.push(EXPIRED);
+      showSignIn(EXPIRED);
+    } else if (res.status === 401 && state.auth.mode === "oauth") {
+      lines.push("Sign in to continue.");
+    } else if (res.status === 401) {
+      lines.push(getKey() ? "The API key was not accepted. Paste another below."
+        : canSignIn() ? "Sign in, or paste an API key below." : "This server needs an API key. Paste it below.");
       showKeyPanel();
+    }
+    if (res.status === 403 && error && error.code === "INSUFFICIENT_SCOPE") {
+      lines.push("The identity provider did not grant " + requiredScope() + " to this sign-in: ask IT to add it to the workbench client.");
     }
     if (res.status === 429) {
       lines.push("Rate limited: retry after " + (res.retryAfter ? res.retryAfter + " seconds" : "a short wait") + ".");
@@ -1278,12 +1598,23 @@
         : window.location.origin;
       $("server-url").textContent = resource;
     });
+    // How this server authenticates; the only source of the sign-in URLs.
+    return request("GET", "workbench/auth.json").then(function (res) {
+      if (!res.failure && res.status === 200 && res.body && typeof res.body.mode === "string") state.auth = res.body;
+      return finishSignIn();
+    }).then(function (message) {
+      applyAuth(message);
+      return connect();
+    });
+  }
+
+  function connect() {
     setStatus("Connecting…");
     return calc("describe", {}).then(function (res) {
       if (!isEnvelope(res)) {
         var lines = describeFailure(res);
         setStatus(lines.join(" · "), true);
-        if (res.status === 401) $("key-input").focus();
+        if (res.status === 401) $(res.oauth || state.auth.mode === "oauth" ? "signin-start" : "key-input").focus();
         return;
       }
       if (getKey()) $("key-panel").hidden = false;
@@ -1307,8 +1638,10 @@
         return;
       }
       setKey(value);
-      start();
+      connect();
     });
+    $("signin-start").addEventListener("click", signIn);
+    $("signin-out").addEventListener("click", signOut);
     $("key-forget").addEventListener("click", function () {
       setKey("");
       setStatus("Key forgotten for this tab.");
@@ -1340,6 +1673,17 @@
       selectRevision($("revision-input").value);
     });
     start();
+  }
+
+  // Under node only (no module object in a browser): export the pure
+  // sign-in decisions for scripts/workbench_unit_test.mjs and wire nothing.
+  if (typeof module !== "undefined" && module.exports && typeof document === "undefined") {
+    module.exports = {
+      tokenState: tokenState, tokenRecord: tokenRecord, classifyCallback: classifyCallback,
+      authorizeParams: authorizeParams, idpError: idpError,
+      EXPIRED: EXPIRED, MISMATCH: MISMATCH, STALE: STALE, PENDING_MAX_MS: PENDING_MAX_MS
+    };
+    return;
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wire);
