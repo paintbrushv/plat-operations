@@ -174,7 +174,7 @@ fn trace_dir_appends_one_jsonl_line_per_call_without_a_database() {
     let record: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(record["trace_id"], envelope["trace_id"]);
     assert_eq!(record["function"], "describe");
-    assert_eq!(record["version"], "1.2.0");
+    assert_eq!(record["version"], "1.3.0");
     assert_eq!(record["caller"], "cli");
     assert_eq!(record["status"], "calculated");
     assert_eq!(record["input_sha256"], envelope["input_sha256"]);

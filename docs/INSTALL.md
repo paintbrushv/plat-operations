@@ -282,8 +282,9 @@ does not refuse to issue one), and its refusal is shown with its code and
 message as it sent them; the button is off only when the review itself was
 refused. When the loaded list shows a later revision that supersedes the
 one under review, the confirmation says so (and so does the Issued reports
-block), but the engine still issues if you confirm, recording the
-superseded figures. If the request fails without an answer (a timeout, a
+block) and that the engine will refuse; if you confirm anyway, the engine
+refuses with `SUPERSEDED`, naming the latest revision, and the page shows
+that refusal. Issue the latest revision instead. If the request fails without an answer (a timeout, a
 network failure or a server error), the report may already exist, so
 reload the list before trying again. Issuing the same revision again makes another report with its own id
 and hash and never changes the first. The page then shows the new report id,

@@ -84,7 +84,9 @@ revision reports the change in every bridge value against its parent. See the
 **Issued report.** An immutable record created by `issue_report` (or the
 `issue` command) for a revision. It stores the full review body at that moment,
 with a new `report_id` and `issued_at`; issuing the same revision again makes a
-new report with a different hash and never changes the old one. It always says
+new report with a different hash and never changes the old one. Only the latest
+revision of a property and period can be issued: a revision a correction has
+superseded refuses with `SUPERSEDED`, naming the latest. It always says
 `human_approval: not_granted`: issuing is a record, not sign-off.
 
 **Review reason.** A named condition that makes a result `review_required`

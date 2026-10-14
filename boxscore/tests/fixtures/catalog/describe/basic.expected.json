@@ -1,5 +1,5 @@
 {
-  "output_sha256": "de48f62a90bbae98de0026dd03d9f20a45af4298f5dcdf2dec2cb3aeeb14d041",
+  "output_sha256": "ec94f3a9441fd3dbc5d8ac2c1fd7c8ad93b8f8db247b8eb009988f5b4d633eaf",
   "result": {
     "adapters": [
       {
@@ -220,7 +220,7 @@
         },
         "stateful": false,
         "summary": "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
-        "version": "1.2.0"
+        "version": "1.3.0"
       },
       {
         "input_schema": {
@@ -1266,8 +1266,8 @@
           "type": "object"
         },
         "stateful": true,
-        "summary": "Issue an immutable report record for a revision. Review flags stay visible; human approval is never granted here.",
-        "version": "1.0.0"
+        "summary": "Issue an immutable report record for a revision; a revision a correction has superseded is refused (SUPERSEDED, naming the latest). Review flags stay visible; human approval is never granted here.",
+        "version": "1.1.0"
       },
       {
         "input_schema": {
@@ -2806,5 +2806,5 @@
     }
   },
   "status": "calculated",
-  "version": "1.2.0"
+  "version": "1.3.0"
 }

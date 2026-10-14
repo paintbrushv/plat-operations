@@ -365,7 +365,8 @@ The original revision still reviews to `-5100.00`. If you give a stale revision
 id (someone else already corrected the period) or no reason, the import refuses
 with `STALE_REVISION`. To publish, `boxscore-exact issue --database ./exact.sqlite
 --revision NEW_REVISION_ID` creates a new immutable report record with a new
-report id each time; old report bodies never change.
+report id each time; old report bodies never change. Issuing the original
+revision now refuses with `SUPERSEDED`, naming the correction as the latest.
 
 ## Verify a citation
 

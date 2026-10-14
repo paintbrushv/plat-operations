@@ -64,7 +64,7 @@ impl Calculation {
 pub const CATALOG: &[Calculation] = &[
     Calculation {
         name: "describe",
-        version: "1.2.0",
+        version: "1.3.0",
         summary: "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
         stateful: false,
         input_schema: schemas::empty_input,
@@ -96,8 +96,8 @@ pub const CATALOG: &[Calculation] = &[
     },
     Calculation {
         name: "issue_report",
-        version: "1.0.0",
-        summary: "Issue an immutable report record for a revision. Review flags stay visible; human approval is never granted here.",
+        version: "1.1.0",
+        summary: "Issue an immutable report record for a revision; a revision a correction has superseded is refused (SUPERSEDED, naming the latest). Review flags stay visible; human approval is never granted here.",
         stateful: true,
         input_schema: schemas::revision_input,
         output_schema: schemas::issue_output,

@@ -1018,7 +1018,7 @@
   }
 
   function supersededNote(ids) {
-    return "This revision has been superseded by " + ids.join(", ") + " in the loaded list. A report issued here records the superseded figures.";
+    return "This revision has been superseded by " + ids.join(", ") + " in the loaded list. The engine will refuse to issue a report for it (SUPERSEDED); issue the latest revision instead.";
   }
 
   // The engine decides whether a report can be issued. A refused review has
