@@ -1,5 +1,5 @@
 {
-  "output_sha256": "ec94f3a9441fd3dbc5d8ac2c1fd7c8ad93b8f8db247b8eb009988f5b4d633eaf",
+  "output_sha256": "81f4df53f020f35dc2df76f23661aba0880f682e8ffcf766fcd252a45e656180",
   "result": {
     "adapters": [
       {
@@ -2802,7 +2802,7 @@
     "producer": {
       "arithmetic": "checked_i64_cents",
       "name": "boxscore-exact",
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   },
   "status": "calculated",

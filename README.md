@@ -1,6 +1,6 @@
 # plat-operations (BOXSCORE)
 
-**v0.2.0:** use the [exact-cent workflow](docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
+**v0.3.0:** use the [exact-cent workflow](docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
 
 A deterministic, checked-cent calculation core for multifamily operating numbers
 (net operating income (NOI) variance, occupancy, delinquency, trailing twelve
@@ -21,7 +21,7 @@ and nothing else needs a network. Three commands load a synthetic sample
 month for "Sample Gardens" (24 units, 2026-05):
 
 ```bash
-IMAGE=ghcr.io/paintbrushv/plat-operations:0.2.0
+IMAGE=ghcr.io/paintbrushv/plat-operations:0.3.0
 SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges"
 docker run --rm $SAFE "$IMAGE"                                    # 1. prints the calculation catalog
 docker run --rm $SAFE -v boxscore-data:/data "$IMAGE" init --database /data/exact.sqlite   # 2. create the database
@@ -30,8 +30,8 @@ docker run --rm $SAFE -v boxscore-data:/data -v "$PWD/docs/quickstart:/in:ro" "$
   --snapshot /in/snapshot.json --property "Sample Gardens" --period 2026-05 --units 24   # 3. import it
 ```
 
-> **Published image.** Release 0.2.0 is the first version pushed to GHCR, as
-> `ghcr.io/paintbrushv/plat-operations:0.2.0` (`linux/amd64`; the same digest is
+> **Published image.** Release 0.3.0 is pushed to GHCR as
+> `ghcr.io/paintbrushv/plat-operations:0.3.0` (`linux/amd64`; the same digest is
 > also tagged `sha-<first 7 hex of the commit>`, and there is no `latest` tag).
 > The release workflow signs each image with cosign keyless signing and attaches
 > its SBOM as a signed attestation. Verify both before first use with the
@@ -42,7 +42,7 @@ docker run --rm $SAFE -v boxscore-data:/data -v "$PWD/docs/quickstart:/in:ro" "$
 > builds and checks the image the same way) and set `IMAGE=boxscore-exact:local`:
 >
 > ```bash
-> docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> docker build --build-arg VERSION=0.3.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
 > IMAGE=boxscore-exact:local
 > ```
 
@@ -69,8 +69,9 @@ output hash with every number.
 It also serves a browser workbench at `/` for analysts without an
 agent connection: load a period from files you choose (and correct one),
 list what is loaded, review a period with its citation, issue a report
-from the review (after a confirmation), and look up a trace; API keys
-only, no OAuth sign-in from the browser
+from the review (after a confirmation), and look up a trace. It takes an
+API key, or signs in through your identity provider when the server is started
+with `--oauth-browser-client-id`
 ([INSTALL.md](docs/INSTALL.md#browser-workbench)). Scripts and
 Claude Code use API keys. The claude.ai and ChatGPT remote connectors sign in
 with OAuth through your own identity provider (IdP), which the server checks

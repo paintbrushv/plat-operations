@@ -1,6 +1,6 @@
 # Boxscore
 
-**v0.2.0:** use the [exact-cent workflow](../docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
+**v0.3.0:** use the [exact-cent workflow](../docs/EXACT_CENTS.md) for canonical operating imports, corrections, and reports. Legacy commands retain floating-point storage.
 
 New here? Start with the [QUICKSTART](../QUICKSTART.md).
 

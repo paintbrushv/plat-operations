@@ -1,6 +1,6 @@
 # Exact-cent operating workflow
 
-`boxscore-exact` is the v0.2.0 operating producer. It uses checked
+`boxscore-exact` is the v0.3.0 operating producer. It uses checked
 signed integer USD cents for GL imports, snapshot money, variance, corrections,
 issued totals, and SQLite persistence. Rates and occupancy counts are separate.
 The general `boxscore` commands still use legacy floating-point money and are
@@ -186,7 +186,7 @@ Every response is an envelope:
 
 ```json
 {"contract_version":"plat.ops/1","function":"noi_variance","version":"1.0.0",
- "producer":{"name":"boxscore-exact","version":"0.2.0","arithmetic":"checked_i64_cents"},
+ "producer":{"name":"boxscore-exact","version":"0.3.0","arithmetic":"checked_i64_cents"},
  "input_sha256":"…","output_sha256":"…","computed_at":"2026-10-11T15:00:00Z",
  "trace_id":"3f0c9b52-…","trace_store":"database",
  "citation":"boxscore noi_variance@1.0.0 · trace 3f0c9b52-… · input sha256:1b7638a0c2d4… · output sha256:ce5487f1e2a3…",

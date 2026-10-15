@@ -7,18 +7,18 @@ no port unless you start [`serve`](#http-server-serve). [DATA_FLOW.md](DATA_FLOW
 and what leaves, for an IT review. The commands below are the same ones
 [EXACT_CENTS.md](EXACT_CENTS.md) documents for the native binary.
 
-Examples use version `0.2.0`. Use the release you reviewed, and pin it by
+Examples use version `0.3.0`. Use the release you reviewed, and pin it by
 digest once you have verified it (see [Verify the image](#verify-the-image)).
 The image is published for `linux/amd64`. On Apple Silicon, Docker Desktop
 runs it under emulation; add `--platform linux/amd64` to silence the warning.
 
 ```bash
-IMAGE=ghcr.io/paintbrushv/plat-operations:0.2.0
+IMAGE=ghcr.io/paintbrushv/plat-operations:0.3.0
 docker pull "$IMAGE"
 ```
 
-> **Published image.** Release 0.2.0 is the first version pushed to GHCR, as
-> `ghcr.io/paintbrushv/plat-operations:0.2.0` (`linux/amd64`; the same digest is
+> **Published image.** Release 0.3.0 is pushed to GHCR as
+> `ghcr.io/paintbrushv/plat-operations:0.3.0` (`linux/amd64`; the same digest is
 > also tagged `sha-<first 7 hex of the commit>`, and there is no `latest` tag).
 > The release workflow signs each image with cosign keyless signing and attaches
 > its SBOM as a signed attestation. Verify both before first use; the commands
@@ -29,7 +29,7 @@ docker pull "$IMAGE"
 > `scripts/check_image.py` builds and checks the image the same way):
 >
 > ```bash
-> docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> docker build --build-arg VERSION=0.3.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
 > IMAGE=boxscore-exact:local
 > ```
 
@@ -134,7 +134,7 @@ first (above), then add this to `claude_desktop_config.json` (macOS:
         "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "-v", "boxscore-data:/data",
-        "ghcr.io/paintbrushv/plat-operations:0.2.0",
+        "ghcr.io/paintbrushv/plat-operations:0.3.0",
         "mcp", "--database", "/data/exact.sqlite"
       ]
     }
@@ -143,7 +143,7 @@ first (above), then add this to `claude_desktop_config.json` (macOS:
 ```
 
 The minimal form is `docker run -i --rm -v boxscore-data:/data
-ghcr.io/paintbrushv/plat-operations:0.2.0 mcp --database /data/exact.sqlite`;
+ghcr.io/paintbrushv/plat-operations:0.3.0 mcp --database /data/exact.sqlite`;
 the extra flags only take privileges away. If Claude Desktop cannot find
 `docker`, give its absolute path in `command` (for example
 `/usr/local/bin/docker`). Restart Claude Desktop. Each session starts a fresh
@@ -429,7 +429,7 @@ stopping writers, keep the database in a host directory and use the host's
 
 ## Upgrade and rollback
 
-Images are tagged by version (`0.2.0`) and by commit (`sha-<7 hex>`); there is
+Images are tagged by version (`0.3.0`) and by commit (`sha-<7 hex>`); there is
 no `latest` tag. To upgrade, back up, pull the new tag, and change the tag in
 your commands and in `claude_desktop_config.json`. To roll back, put the old
 tag back.
@@ -467,15 +467,15 @@ workflow, and its SBOM is attached as a signed attestation. Check both before
 first use:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/paintbrushv/plat-operations:0.2.0   # shows the digest
+docker buildx imagetools inspect ghcr.io/paintbrushv/plat-operations:0.3.0   # shows the digest
 cosign verify \
-  --certificate-identity "https://github.com/paintbrushv/plat-operations/.github/workflows/image.yml@refs/tags/v0.2.0" \
+  --certificate-identity "https://github.com/paintbrushv/plat-operations/.github/workflows/image.yml@refs/tags/v0.3.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/paintbrushv/plat-operations:0.2.0
+  ghcr.io/paintbrushv/plat-operations:0.3.0
 cosign verify-attestation --type spdxjson \
-  --certificate-identity "https://github.com/paintbrushv/plat-operations/.github/workflows/image.yml@refs/tags/v0.2.0" \
+  --certificate-identity "https://github.com/paintbrushv/plat-operations/.github/workflows/image.yml@refs/tags/v0.3.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/paintbrushv/plat-operations:0.2.0
+  ghcr.io/paintbrushv/plat-operations:0.3.0
 ```
 
 Then refer to the image by digest
@@ -488,8 +488,8 @@ the SBOM and what the signature does and does not prove.
 From a checkout of the repository:
 
 ```bash
-docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
-python3 scripts/check_image.py boxscore-exact:local --expect-version 0.2.0
+docker build --build-arg VERSION=0.3.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+python3 scripts/check_image.py boxscore-exact:local --expect-version 0.3.0
 ```
 
 `scripts/check_image.py` is the same check the CI image job runs.
