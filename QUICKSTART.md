@@ -26,13 +26,13 @@ Docker flags and every option below are explained in
 sends is in [docs/DATA_FLOW.md](docs/DATA_FLOW.md).
 
 ```bash
-IMAGE=ghcr.io/paintbrushv/plat-operations:0.2.0
+IMAGE=ghcr.io/paintbrushv/plat-operations:0.3.0
 SAFE="--network none --read-only --cap-drop ALL --security-opt no-new-privileges"
 docker pull "$IMAGE"
 ```
 
-> **Published image.** Release 0.2.0 is the first version pushed to GHCR, as
-> `ghcr.io/paintbrushv/plat-operations:0.2.0` (`linux/amd64`; the same digest is
+> **Published image.** Release 0.3.0 is pushed to GHCR as
+> `ghcr.io/paintbrushv/plat-operations:0.3.0` (`linux/amd64`; the same digest is
 > also tagged `sha-<first 7 hex of the commit>`, and there is no `latest` tag).
 > The release workflow signs each image with cosign keyless signing and attaches
 > its SBOM as a signed attestation. Verify both before first use with the
@@ -43,12 +43,12 @@ docker pull "$IMAGE"
 > `scripts/check_image.py` builds and checks the image the same way):
 >
 > ```bash
-> docker build --build-arg VERSION=0.2.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
+> docker build --build-arg VERSION=0.3.0 --build-arg REVISION="$(git rev-parse HEAD)" -t boxscore-exact:local .
 > IMAGE=boxscore-exact:local
 > ```
 >
 > With the local image, put `boxscore-exact:local` in place of
-> `ghcr.io/paintbrushv/plat-operations:0.2.0` in the Claude Desktop snippet in
+> `ghcr.io/paintbrushv/plat-operations:0.3.0` in the Claude Desktop snippet in
 > step 5.
 
 **1. Describe the catalog.** This is the default command. It prints one JSON
@@ -103,7 +103,7 @@ You should see `"status":"calculated"` and, in `variance.noi_bridge`,
         "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "-v", "boxscore-data:/data",
-        "ghcr.io/paintbrushv/plat-operations:0.2.0",
+        "ghcr.io/paintbrushv/plat-operations:0.3.0",
         "mcp", "--database", "/data/exact.sqlite"
       ]
     }

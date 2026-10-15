@@ -1398,7 +1398,7 @@ fn generated_goldens_use_the_same_placeholders_they_are_checked_with() {
         "input_sha256": "f".repeat(64), "variance": {"actual": "1.00"},
         "revisions": [{"id": "abc-123", "parent_id": null}],
         "trace": {"trace_id": "abc-123", "started_at": "2026-10-11T15:00:00+00:00",
-                  "output_sha256": "e".repeat(64), "producer_version": "0.2.0", "caller": "test"}
+                  "output_sha256": "e".repeat(64), "producer_version": "0.3.0", "caller": "test"}
     });
     let golden = placeholderize(&result, "", &captures);
     assert_eq!(golden["revision_id"], "<id=rev1>");
