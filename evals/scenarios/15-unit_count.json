@@ -1,0 +1,50 @@
+{
+  "id": "unit_count",
+  "title": "How many units: unit_count comes from list_revisions or a review",
+  "setup": [
+    {
+      "args": [
+        "init",
+        "--database",
+        "{db}"
+      ]
+    },
+    {
+      "args": [
+        "import-csv",
+        "--database",
+        "{db}",
+        "--actuals",
+        "{repo}/docs/quickstart/actuals.csv",
+        "--budgets",
+        "{repo}/docs/quickstart/budgets.csv",
+        "--snapshot",
+        "{repo}/docs/quickstart/snapshot.json",
+        "--property",
+        "Sample Gardens",
+        "--period",
+        "2026-05",
+        "--units",
+        "24"
+      ],
+      "save_revision_as": "may"
+    }
+  ],
+  "question": "How many units does Sample Gardens have?",
+  "expect": {
+    "tools": [
+      {
+        "function": [
+          "list_revisions",
+          "review_period"
+        ],
+        "args_include": {}
+      }
+    ],
+    "must_mention": [
+      "result.revisions.0.unit_count|result.unit_count"
+    ],
+    "must_not_contain_numbers": false,
+    "max_tokens": 1024
+  }
+}

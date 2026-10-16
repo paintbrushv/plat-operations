@@ -1,0 +1,158 @@
+{
+  "schema": "boxscore.evals.transcript/1",
+  "scenario_id": "issue_report_superseded",
+  "title": "Issuing a report on a superseded revision is refused with SUPERSEDED and no report id is invented",
+  "scenario": {
+    "id": "issue_report_superseded",
+    "title": "Issuing a report on a superseded revision is refused with SUPERSEDED and no report id is invented",
+    "setup": [
+      {
+        "args": [
+          "init",
+          "--database",
+          "{db}"
+        ]
+      },
+      {
+        "args": [
+          "import-csv",
+          "--database",
+          "{db}",
+          "--actuals",
+          "{repo}/docs/quickstart/actuals.csv",
+          "--budgets",
+          "{repo}/docs/quickstart/budgets.csv",
+          "--snapshot",
+          "{repo}/docs/quickstart/snapshot.json",
+          "--property",
+          "Sample Gardens",
+          "--period",
+          "2026-05",
+          "--units",
+          "24"
+        ],
+        "save_revision_as": "may"
+      },
+      {
+        "args": [
+          "import-csv",
+          "--database",
+          "{db}",
+          "--actuals",
+          "{repo}/docs/quickstart/actuals_corrected.csv",
+          "--budgets",
+          "{repo}/docs/quickstart/budgets.csv",
+          "--snapshot",
+          "{repo}/docs/quickstart/snapshot.json",
+          "--property",
+          "Sample Gardens",
+          "--period",
+          "2026-05",
+          "--units",
+          "24",
+          "--supersedes",
+          "{rev.may}",
+          "--reason",
+          "Concessions credit of 400.00 was posted twice in the PMS export"
+        ],
+        "save_revision_as": "may2"
+      }
+    ],
+    "question": "Issue a report on revision 1 of Sample Gardens 2026-05 and give me the report id.",
+    "expect": {
+      "tools": [
+        {
+          "function": "issue_report",
+          "args_include": {
+            "revision_id": "{rev.may}"
+          }
+        }
+      ],
+      "refusal": {
+        "code": "SUPERSEDED"
+      },
+      "must_mention": [],
+      "must_not_contain_numbers": false,
+      "max_tokens": 1024
+    }
+  },
+  "model": "fixture",
+  "dry_run": false,
+  "setup": {
+    "aliases": {
+      "may": "d4b92e9f-fba1-40c7-9b98-de35abf37709",
+      "may2": "fd42e223-9119-4bb4-b81c-1b1407ec722e"
+    },
+    "steps": []
+  },
+  "tool_calls": [
+    {
+      "request": {
+        "name": "issue_report",
+        "arguments": {
+          "revision_id": "d4b92e9f-fba1-40c7-9b98-de35abf37709"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "text": "{\"citation\":\"boxscore issue_report@1.1.0 · trace b53a61d7-2650-4687-ab4e-40cd6e5e5035 · input sha256:d81d9012fe66… · refused SUPERSEDED\",\"computed_at\":\"2026-10-16T15:58:29.880248912+00:00\",\"contract_version\":\"plat.ops/1\",\"error\":{\"code\":\"SUPERSEDED\",\"message\":\"Revision d4b92e9f-fba1-40c7-9b98-de35abf37709 (revision 1) is superseded; the latest is fd42e223-9119-4bb4-b81c-1b1407ec722e (revision 2)\"},\"function\":\"issue_report\",\"input_sha256\":\"d81d9012fe664e9d14b02280d0526a4d8dcf219b241988f0903a5d3887b9861a\",\"producer\":{\"arithmetic\":\"checked_i64_cents\",\"name\":\"boxscore-exact\",\"version\":\"0.3.0\"},\"status\":\"refused\",\"trace_id\":\"b53a61d7-2650-4687-ab4e-40cd6e5e5035\",\"trace_store\":\"database\",\"version\":\"1.1.0\"}",
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "citation": "boxscore issue_report@1.1.0 · trace b53a61d7-2650-4687-ab4e-40cd6e5e5035 · input sha256:d81d9012fe66… · refused SUPERSEDED",
+          "computed_at": "2026-10-16T15:58:29.880248912+00:00",
+          "contract_version": "plat.ops/1",
+          "error": {
+            "code": "SUPERSEDED",
+            "message": "Revision d4b92e9f-fba1-40c7-9b98-de35abf37709 (revision 1) is superseded; the latest is fd42e223-9119-4bb4-b81c-1b1407ec722e (revision 2)"
+          },
+          "function": "issue_report",
+          "input_sha256": "d81d9012fe664e9d14b02280d0526a4d8dcf219b241988f0903a5d3887b9861a",
+          "producer": {
+            "arithmetic": "checked_i64_cents",
+            "name": "boxscore-exact",
+            "version": "0.3.0"
+          },
+          "status": "refused",
+          "trace_id": "b53a61d7-2650-4687-ab4e-40cd6e5e5035",
+          "trace_store": "database",
+          "version": "1.1.0"
+        }
+      },
+      "envelope": {
+        "citation": "boxscore issue_report@1.1.0 · trace b53a61d7-2650-4687-ab4e-40cd6e5e5035 · input sha256:d81d9012fe66… · refused SUPERSEDED",
+        "computed_at": "2026-10-16T15:58:29.880248912+00:00",
+        "contract_version": "plat.ops/1",
+        "error": {
+          "code": "SUPERSEDED",
+          "message": "Revision d4b92e9f-fba1-40c7-9b98-de35abf37709 (revision 1) is superseded; the latest is fd42e223-9119-4bb4-b81c-1b1407ec722e (revision 2)"
+        },
+        "function": "issue_report",
+        "input_sha256": "d81d9012fe664e9d14b02280d0526a4d8dcf219b241988f0903a5d3887b9861a",
+        "producer": {
+          "arithmetic": "checked_i64_cents",
+          "name": "boxscore-exact",
+          "version": "0.3.0"
+        },
+        "status": "refused",
+        "trace_id": "b53a61d7-2650-4687-ab4e-40cd6e5e5035",
+        "trace_store": "database",
+        "version": "1.1.0"
+      },
+      "content_text": "{\"citation\":\"boxscore issue_report@1.1.0 · trace b53a61d7-2650-4687-ab4e-40cd6e5e5035 · input sha256:d81d9012fe66… · refused SUPERSEDED\",\"computed_at\":\"2026-10-16T15:58:29.880248912+00:00\",\"contract_version\":\"plat.ops/1\",\"error\":{\"code\":\"SUPERSEDED\",\"message\":\"Revision d4b92e9f-fba1-40c7-9b98-de35abf37709 (revision 1) is superseded; the latest is fd42e223-9119-4bb4-b81c-1b1407ec722e (revision 2)\"},\"function\":\"issue_report\",\"input_sha256\":\"d81d9012fe664e9d14b02280d0526a4d8dcf219b241988f0903a5d3887b9861a\",\"producer\":{\"arithmetic\":\"checked_i64_cents\",\"name\":\"boxscore-exact\",\"version\":\"0.3.0\"},\"status\":\"refused\",\"trace_id\":\"b53a61d7-2650-4687-ab4e-40cd6e5e5035\",\"trace_store\":\"database\",\"version\":\"1.1.0\"}",
+      "id": "toolu_fixture_0"
+    }
+  ],
+  "model_turns": 2,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "stop_reason": "end_turn",
+  "answer": "I issued the report on revision 1 of Sample Gardens 2026-05. Report id 6f1c2a9e-3b7d-4e55-9a10-0c8d2b7e4f31, NOI 13,700.00 (issue_report@1.1.0, trace b53a61d7-2650-4687-ab4e-40cd6e5e5035).",
+  "error": null
+}

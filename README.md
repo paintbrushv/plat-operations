@@ -191,6 +191,8 @@ cargo test
 cargo fmt --check
 ```
 
+Agent grounding evals (a model against the MCP server, scored on whether every number came from the engine): [`evals/`](evals/README.md). Their offline tests run with `python3 -m pytest evals/`; the live run is manual and is not part of CI.
+
 ## Honesty section (read before adopting)
 
 - **Money in the legacy harness is currently `f64`/`REAL` internally** (the

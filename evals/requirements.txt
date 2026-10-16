@@ -1,0 +1,6 @@
+# Needed only to run the evals against the model (run.py without --dry-run).
+# The scorer, the report and `python3 -m pytest evals/` need pytest alone; the
+# `anthropic` import in run.py is lazy.
+# Versions are the ones the harness was developed and tested with.
+anthropic==1.15.0
+pytest==9.1.1

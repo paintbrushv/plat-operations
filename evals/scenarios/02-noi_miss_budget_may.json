@@ -1,0 +1,57 @@
+{
+  "id": "noi_miss_budget_may",
+  "title": "Why NOI missed budget for Sample Gardens in 2026-05 (START_HERE question 2)",
+  "setup": [
+    {
+      "args": [
+        "init",
+        "--database",
+        "{db}"
+      ]
+    },
+    {
+      "args": [
+        "import-csv",
+        "--database",
+        "{db}",
+        "--actuals",
+        "{repo}/docs/quickstart/actuals.csv",
+        "--budgets",
+        "{repo}/docs/quickstart/budgets.csv",
+        "--snapshot",
+        "{repo}/docs/quickstart/snapshot.json",
+        "--property",
+        "Sample Gardens",
+        "--period",
+        "2026-05",
+        "--units",
+        "24"
+      ],
+      "save_revision_as": "may"
+    }
+  ],
+  "question": "Why did NOI miss budget for Sample Gardens in 2026-05?",
+  "expect": {
+    "tools": [
+      {
+        "function": "list_revisions",
+        "args_include": {}
+      },
+      {
+        "function": "review_period",
+        "args_include": {
+          "revision_id": "{rev.may}"
+        }
+      }
+    ],
+    "must_mention": [
+      "result.variance.noi_bridge.actual_noi",
+      "result.variance.noi_bridge.budget_noi",
+      "result.variance.noi_bridge.noi_variance",
+      "result.variance.noi_bridge.revenue_variance",
+      "result.variance.noi_bridge.expense_variance"
+    ],
+    "max_tokens": 1500,
+    "must_not_contain_numbers": false
+  }
+}
