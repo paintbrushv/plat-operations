@@ -24,7 +24,9 @@ const SECRET: &str = "synthetic-test-secret-0123456789abcdef";
 const PUBLIC_URL: &str = "https://boxscore.example.test";
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const HOSTILE_NAME: &str = "<img src=x onerror=alert(1)>";
-const HOSTILE_SCRIPT: &str = "</td><script>alert(\"x\")</script>\u{7}\u{1b}[31m";
+// Markup only: a control character in an account name is refused at import
+// (see `hostile_account_names_come_back_as_plain_json_strings`).
+const HOSTILE_SCRIPT: &str = "</td><script>alert(\"x\")</script>";
 
 fn keyed_config(database: Option<PathBuf>) -> Config {
     Config {
@@ -1337,20 +1339,49 @@ async fn hostile_account_names_come_back_as_plain_json_strings() {
         envelope["result"]["variance"]["noi_bridge"]["noi_variance"],
         "34562.89"
     );
-    // On the wire the names are JSON strings: the markup is quoted, the
-    // control characters escaped.
+    // On the wire the names are JSON strings: the markup is quoted and the
+    // quotes inside it escaped.
     let raw = String::from_utf8(reviewed.body.clone()).unwrap();
     assert!(raw.contains(&format!("\"account_name\":\"{HOSTILE_NAME}\"")));
-    assert!(raw.contains(r#"\u0007\u001b[31m"#));
-    assert!(!raw.contains('\u{7}'));
+    assert!(raw.contains(r#"<script>alert(\"x\")</script>"#));
+
+    // A control character in an account name never reaches a stored revision
+    // or the page: the import refuses, naming the row, the field and the
+    // code point.
+    let mut with_bell = dataset.clone();
+    with_bell["actuals"][1]["account_name"] = json!("Payroll\u{7}\u{1b}[31m");
+    let refused = send(
+        &app,
+        calc(
+            "import_period",
+            None,
+            origin,
+            &json!({"dataset": with_bell}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        refused.json()
+    );
+    let envelope = refused.json();
+    assert_eq!(envelope["error"]["code"], "INVALID_INPUT");
+    let message = envelope["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("actuals[1].account_name") && message.contains("U+0007"),
+        "{message}"
+    );
 }
 
-/// Class parity, the engine's side: Rust's trim keeps U+FEFF, so a category
-/// of "\u{FEFF}rental income" is not revenue to the engine. It comes back with
-/// the mark, and the page classifies that returned string without trimming
-/// it again (see `classOf` in app.js), so both call it an expense.
+/// UPL-102. Rust's trim keeps U+FEFF, so a category of "\u{FEFF}rental income"
+/// is not revenue to the engine, while JavaScript's trim strips it and would
+/// call it revenue. The import now refuses such a category outright, so the
+/// two can no longer disagree about a stored revision; the engine's own class
+/// function is unchanged and still calls it an expense.
 #[tokio::test]
-async fn a_byte_order_mark_keeps_a_category_out_of_revenue() {
+async fn a_byte_order_mark_in_a_category_is_refused_at_import() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("exact.sqlite");
     let init = Command::new(env!("CARGO_BIN_EXE_boxscore-exact"))
@@ -1363,6 +1394,7 @@ async fn a_byte_order_mark_keeps_a_category_out_of_revenue() {
         ..loopback_config(3819)
     });
     let marked = "\u{FEFF}rental income";
+    assert_eq!(account_class(marked), AccountClass::Expense);
     let dataset = json!({
         "property": "Synthetic Birch", "period": "2026-05",
         "currency": "USD", "expense_convention": "positive_costs", "unit_count": 10,
@@ -1379,40 +1411,24 @@ async fn a_byte_order_mark_keeps_a_category_out_of_revenue() {
         calc("import_period", None, None, &json!({"dataset": dataset})),
     )
     .await;
-    assert_eq!(imported.status, StatusCode::OK, "{}", imported.json());
-    let revision = imported.json()["result"]["revision_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let reviewed = send(
-        &app,
-        calc(
-            "review_period",
-            None,
-            None,
-            &json!({"revision_id": revision}),
-        ),
-    )
-    .await;
-    assert_eq!(reviewed.status, StatusCode::OK, "{}", reviewed.json());
-    let envelope = reviewed.json();
-    let variance = &envelope["result"]["variance"];
-    // The returned category still carries the mark.
-    let account = variance["by_account"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["account_code"] == "4100")
-        .unwrap();
-    assert_eq!(account["category"], marked);
-    assert_eq!(account_class(marked), AccountClass::Expense);
-    // Revenue is the unmarked account alone; the marked one moved expenses.
-    let bridge = &variance["noi_bridge"];
-    assert_eq!(bridge["actual_revenue"], "1000.00");
-    assert_eq!(bridge["revenue_variance"], "100.00");
-    assert_eq!(bridge["actual_expenses"], "400.00");
-    assert_eq!(bridge["expense_variance"], "100.00");
-    assert_eq!(bridge["noi_variance"], "0.00");
+    assert_eq!(
+        imported.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        imported.json()
+    );
+    let envelope = imported.json();
+    assert_eq!(envelope["status"], "refused");
+    assert_eq!(envelope["error"]["code"], "INVALID_INPUT");
+    let message = envelope["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("actuals[1].category") && message.contains("U+FEFF"),
+        "{message}"
+    );
+    // Nothing was stored.
+    let listed = send(&app, calc("list_revisions", None, None, &json!({}))).await;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(listed.json()["result"]["revisions"], json!([]));
 }
 
 #[cfg(unix)]

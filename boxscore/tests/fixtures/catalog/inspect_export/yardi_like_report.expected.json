@@ -1,0 +1,103 @@
+{
+  "output_sha256": "334812f0384e8d554973e3748093404c2ef516dd243a954a12b466379d877a7d",
+  "result": {
+    "banner_rows": [
+      "Sample Gardens",
+      "Income Statement 05/2026"
+    ],
+    "bom": false,
+    "columns": [
+      {
+        "distinct_capped": false,
+        "distinct_count": 8,
+        "fill_rate": "1.00",
+        "index": 0,
+        "kind": "text",
+        "name": "Account Code",
+        "redacted": false,
+        "sample": [
+          "4000",
+          "4010",
+          "4020",
+          "4100",
+          "5000"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 8,
+        "fill_rate": "1.00",
+        "index": 1,
+        "kind": "text",
+        "name": "Account Description",
+        "redacted": false,
+        "sample": [
+          "Gross Potential Rent",
+          "Vacancy Loss",
+          "Concessions",
+          "Other Income",
+          "Payroll"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 1,
+        "fill_rate": "1.00",
+        "index": 2,
+        "kind": "period",
+        "name": "Period",
+        "redacted": false,
+        "sample": [
+          "2026-05"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 8,
+        "fill_rate": "1.00",
+        "index": 3,
+        "kind": "money",
+        "name": "Amount",
+        "redacted": false,
+        "sample": [
+          "36,000.00",
+          "(1,200.00)",
+          "(600.00)",
+          "900.00",
+          "8,000.00"
+        ]
+      }
+    ],
+    "data_row_count": 8,
+    "dialect": {
+      "delimiter": ",",
+      "line_ending": "crlf",
+      "quote": "\""
+    },
+    "encoding": "utf-8",
+    "encoding_note": null,
+    "footer_row_count": 1,
+    "footer_rows": [
+      {
+        "first_cell": "Total",
+        "row": 11
+      }
+    ],
+    "header": [
+      "Account Code",
+      "Account Description",
+      "Period",
+      "Amount"
+    ],
+    "header_redacted": false,
+    "header_row": 2,
+    "name": "sample-gardens-income-statement.csv",
+    "redaction": {
+      "applied": true,
+      "columns": []
+    },
+    "truncated": false
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

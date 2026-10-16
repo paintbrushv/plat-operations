@@ -11,7 +11,7 @@
           "revision_id": "<id>"
         },
         "status": "calculated",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       "function": "import_period",
       "input": {
@@ -241,7 +241,7 @@
           "code": "STALE_REVISION"
         },
         "status": "refused",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       "function": "import_period",
       "input": {
@@ -304,7 +304,7 @@
           "revision_id": "<id>"
         },
         "status": "calculated",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       "function": "import_period",
       "input": {

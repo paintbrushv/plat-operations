@@ -626,7 +626,7 @@ async fn catalog_lists_twelve_functions_with_t12_before_get_provenance_and_schem
     .await;
     let described = result(&envelope);
     let entries = described["calculations"].as_array().unwrap();
-    assert_eq!(entries.len(), 12);
+    assert_eq!(entries.len(), 13);
     let t12 = &entries[10];
     assert_eq!(entries[11]["name"], "get_provenance");
     assert_eq!(t12["name"], "t12");

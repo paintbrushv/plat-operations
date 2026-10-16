@@ -1,0 +1,96 @@
+{
+  "output_sha256": "f755a25ccb5225e0cc1f87d2576393e8f61071570682caa8073cab6e2f82cec9",
+  "result": {
+    "banner_rows": [],
+    "bom": false,
+    "columns": [
+      {
+        "distinct_capped": false,
+        "distinct_count": 5,
+        "fill_rate": "1.00",
+        "index": 0,
+        "kind": "text",
+        "name": "Unit",
+        "redacted": false,
+        "sample": [
+          "A101",
+          "A102",
+          "A103",
+          "B201",
+          "B202"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 3,
+        "fill_rate": "1.00",
+        "index": 1,
+        "kind": "integer",
+        "name": "Bedrooms",
+        "redacted": false,
+        "sample": [
+          "1",
+          "2",
+          "3"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 4,
+        "fill_rate": "1.00",
+        "index": 2,
+        "kind": "money",
+        "name": "Market Rent",
+        "redacted": false,
+        "sample": [
+          "1,250.00",
+          "1,550.00",
+          "1,950.00",
+          "1,575.00"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 5,
+        "fill_rate": "1.00",
+        "index": 3,
+        "kind": "date",
+        "name": "Move In Date",
+        "redacted": false,
+        "sample": [
+          "2025-06-01",
+          "2025-08-15",
+          "2026-01-01",
+          "2024-11-01",
+          "2026-03-15"
+        ]
+      }
+    ],
+    "data_row_count": 5,
+    "dialect": {
+      "delimiter": "\t",
+      "line_ending": "lf",
+      "quote": "none"
+    },
+    "encoding": "utf-8",
+    "encoding_note": null,
+    "footer_row_count": 0,
+    "footer_rows": [],
+    "header": [
+      "Unit",
+      "Bedrooms",
+      "Market Rent",
+      "Move In Date"
+    ],
+    "header_redacted": false,
+    "header_row": 0,
+    "name": "synthetic-units.tsv",
+    "redaction": {
+      "applied": true,
+      "columns": []
+    },
+    "truncated": false
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

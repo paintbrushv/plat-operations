@@ -173,7 +173,7 @@ Every reason the code emits, in `review_reasons` (or
 
 | term | code |
 |---|---|
-| envelope, versions, the 12 functions | `boxscore/src/exact/catalog.rs` |
+| envelope, versions, the 13 functions | `boxscore/src/exact/catalog.rs` |
 | revisions, corrections, issued reports | `boxscore/src/exact/store.rs` |
 | NOI bridge, positive costs | `boxscore/src/exact/variance.rs` |
 | ratios | `boxscore/src/exact/ratio.rs` |

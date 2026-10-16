@@ -353,6 +353,8 @@ that those connectors sign users in with OAuth through your identity
 provider, and that the claude.ai and ChatGPT walk-throughs there have not
 been tried against a real provider. [stated]
 
+With `inspect_export`, the model vendor receives the headers, the row counts and up to five sample values per column, with free-text columns redacted by default. The `text` argument is a tool-call argument like any other, so an assistant that has read the file in order to call the tool has already sent that text to the vendor; the redaction limits what the tool result adds, not what the assistant already holds. [stated]
+
 How to limit what reaches the vendor:
 
 - **Import outside the chat.** Run `import-csv` from the command line
@@ -360,7 +362,7 @@ How to limit what reaches the vendor:
   through the assistant. Results the assistant asks for, such as a review, still go
   to the vendor.
 - **Run stateless when you can.** Start `mcp` without `--database`: only the
-  stateless functions work (`describe`, `noi_variance`, and `occupancy`,
+  stateless functions work (`describe`, `noi_variance`, `inspect_export`, and `occupancy`,
   `economic_occupancy` and `delinquency` on an inline snapshot), nothing is
   stored apart from a JSONL trace if you set `BOXSCORE_TRACE_DIR`, and the
   assistant cannot read stored periods. Whatever rows you give these

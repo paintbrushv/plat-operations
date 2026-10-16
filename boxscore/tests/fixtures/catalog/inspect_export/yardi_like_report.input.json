@@ -1,0 +1,4 @@
+{
+  "name": "sample-gardens-income-statement.csv",
+  "text": "Sample Gardens,,,\r\nIncome Statement 05/2026,,,\r\nAccount Code,Account Description,Period,Amount\r\n4000,Gross Potential Rent,2026-05,\"36,000.00\"\r\n4010,Vacancy Loss,2026-05,\"(1,200.00)\"\r\n4020,Concessions,2026-05,(600.00)\r\n4100,Other Income,2026-05,900.00\r\n5000,Payroll,2026-05,\"8,000.00\"\r\n5200,Utilities,2026-05,\"2,600.00\"\r\n5300,Insurance,2026-05,\"1,500.00\"\r\n5500,Management Fee,2026-05,\"1,800.00\"\r\nTotal,,,\"46,500.00\"\r\n"
+}

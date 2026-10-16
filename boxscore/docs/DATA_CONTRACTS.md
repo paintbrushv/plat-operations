@@ -89,6 +89,14 @@ hashes match an `import-with` of the same files; `ingest::read_with` adds
 file and no path. An adapter must therefore not state `sources.files` itself
 (`ADAPTER_CONTRACT` when inline files are present).
 
+`canonical.csv/1` ignores a leading UTF-8 byte-order mark (`EF BB BF`) on
+`actuals` and `budgets` when it parses. The per-file hash it records, and the
+inline `files[].sha256`, are of the bytes as received with the mark included, so
+provenance matches the file on disk; the dataset-level `input_sha256` hashes the
+parsed dataset and is therefore the same with or without the mark. A second
+leading mark is refused (`INVALID_INPUT`, naming U+FEFF), since the CSV reader
+would otherwise drop it silently.
+
 `sources.supplied` is the caller's and every other key is the server's.
 `import_period` records a caller's own `sources` object under
 `sources.supplied` in both forms, and never anywhere else, so a caller cannot
@@ -155,9 +163,70 @@ An adapter maps; it does not guess. It must refuse (never coerce):
 
 `store::import` then validates the dataset itself (`INVALID_INPUT`,
 `SNAPSHOT_MISMATCH`, `ACCOUNT_MAPPING_CONFLICT`, `MONEY_OVERFLOW`), so an
-adapter cannot weaken the core's checks. Paths stay a host concern: the
+adapter cannot weaken the core's checks. That validation refuses a `property`,
+`account_code`, `account_name` or `category` containing a Unicode control
+character (`char::is_control`), an invisible format character (category Cf,
+for example U+200B to U+200F, U+2028 to U+202E, U+2060 to U+2064, U+FEFF), an
+invisible filler or variation selector (U+034F, U+115F, U+1160, U+180B to
+U+180F, U+2800, U+3164, U+FE00 to U+FE0F, U+FFA0) or any whitespace other than a
+plain space (U+00A0, U+2000 to U+200A, U+202F, U+205F, U+3000, the line
+separators), naming the row index, the field and the code point (the property
+has no row: a hidden character there would fork the revision chain). The rule
+is for new imports; a revision stored before it stays reviewable
+(`review_period` flags it with the review reason `invisible_characters`), and a
+reviewed copy migration copies such legacy rows unchanged, lists them in the
+plan as an `invisible_characters` difference and does not stop for them. Paths stay a host concern: the
 calculation catalog never takes a file path. Adapters run in the host process
 on local files (`import-with`), or inside `import_period` on inline contents.
+
+### Inspecting an export
+
+Before anyone proposes a mapping for a vendor export, the catalog's stateless
+`inspect_export` (1.0.0) describes its shape: `{"name", "text", "redact"}` in,
+and out the dialect (delimiter, quote, line ending, byte-order mark), the header
+row, the banner rows above it and the footer rows below it (total, subtotal and
+similar tokens, by the same rule as the C1 footer check below), the data row
+count, and for each column (at most 256) a kind (`money`, `integer`, `date`,
+`period`, `empty`, `text`), a fill rate, a distinct count and up to five sample
+values. It never returns the whole file. With redaction on (the default), a
+column is redacted, its sample replaced by `["<redacted>"]` and listed by
+`{index}` in `redaction.columns`, when its header names a person, contact or
+account whatever the column's kind: `resident`, `tenant`, `lessee`, `occupant`,
+`applicant`, `guarantor`, `email`, `phone`, `ssn`, `contact`, `address`,
+`social`, `birth`, `card`, `bank`, `routing`, `license`, `licence`, `mobile`,
+`customer`, `payee`, `owner`, `holder`, `household` (any case, as a word or part of one),
+`ss`, `tin`, `dob`, `tel`, `cell`, `mail`, `first`, `last`, `full`,
+`tax id` (whole words, camel case counted as words, so `Hotel` stays visible,
+and so does a `Lease Start` date), or `name` anywhere in the header unless
+every `name` directly follows `account`, `gl`, `vendor`, `property`, `unit`,
+`column` or `report` (spaces, `_` or `-` allowed between; camel case too) and no
+person word is present (`Vendor Name` and `AccountName` stay visible, `Name` and
+`Name / Unit` are redacted). A text or integer column with an `@`, a `ddd-dd-dddd` value or
+a 13 to 19 digit card number in any row is redacted whatever its header. A text
+column (or an integer column with a value of 7 or more digits) of at least 8
+values that are mostly different (more than half distinct, or at least 10
+distinct values each repeated at most three times) is redacted too, unless its
+header has an identifier or label word (`code`, `id`, `number`, `num`, `no`,
+`ref`, `#`, `account`, `unit`, `description`, `category`); that exemption never
+applies with a person word or an unqualified `name`, and a qualified name
+header has it, so `account_name`, unit ids and account descriptions stay
+visible: a mapping needs them. The header row is echoed, so it is checked too: a
+single cell with `@`, mostly digits (a year or `YYYY-MM` is a label) or more
+than 40 characters is replaced by `<redacted header N>`, and `header_redacted`
+says so. A banner above the header, even a two-cell one such as `Run Date,
+10/16/2026`, does not redact it. A header with fewer cells than its data (more
+than half as many) is chosen over the first data row when the values below are
+all text, and its missing names are `<unnamed N>`.
+`redact: false` turns all of it off. Every list is capped (banner rows 10,
+footer rows 20, samples 5 of at most 80 characters), a control, invisible or
+non-space whitespace character in anything echoed is written `U+XXXX` before
+the caps apply, and the serialized result is held to 256 KiB (samples dropped
+first, then banner rows, then names shortened, `truncated: true`), so the result
+is bounded in bytes whatever the input. A row of more than 256 cells refuses
+`INPUT_LIMIT` as it is read. The agent sees only this result, not the
+file, and an `inspect_export` trace never keeps its input even with
+`BOXSCORE_TRACE_INPUTS=1`; if the caller sends the text in a tool call, the text itself passes
+through the client like any tool argument (see `docs/DATA_FLOW.md`, section 5).
 
 The legacy standardized-CSV lanes below keep their `standardized-yardi`
 lineage label (`connectors::standardized::STANDARDIZED_SOURCE_SYSTEM`); they

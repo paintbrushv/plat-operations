@@ -1,5 +1,5 @@
 {
-  "output_sha256": "81f4df53f020f35dc2df76f23661aba0880f682e8ffcf766fcd252a45e656180",
+  "output_sha256": "9b5cf3e15c39ae111e08a918450b359789a057191cbebe0e2fef52450641f7d7",
   "result": {
     "adapters": [
       {
@@ -47,7 +47,7 @@
           "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
           "INPUT_LIMIT: any file over 2 MiB, inline files over 2 MiB in total, or more than 100000 GL rows",
           "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
-          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, an empty account code or category, or a property, account code, account name or category containing a control character, an invisible format character (such as U+200B or U+FEFF) or whitespace other than a plain space (such as U+00A0)",
           "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
           "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
           "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range"
@@ -69,7 +69,7 @@
           "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
           "INPUT_LIMIT: any file over 2 MiB, inline files over 2 MiB in total, or more than 100000 GL rows",
           "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
-          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+          "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, an empty account code or category, or a property, account code, account name or category containing a control character, an invisible format character (such as U+200B or U+FEFF) or whitespace other than a plain space (such as U+00A0)",
           "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
           "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
           "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range"
@@ -220,7 +220,7 @@
         },
         "stateful": false,
         "summary": "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
-        "version": "1.3.0"
+        "version": "1.4.0"
       },
       {
         "input_schema": {
@@ -639,7 +639,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Adapter file name to that file's full UTF-8 text as a JSON string (a JSON file is sent as its text). The request body is capped at 2 MiB of JSON including escaping (a quote, backslash or newline in a file takes two bytes), so the files together must come in under 2 MiB once escaped",
+              "description": "Adapter file name to that file's full UTF-8 text as a JSON string (a JSON file is sent as its text). The request body is capped at 2 MiB of JSON including escaping (a quote, backslash or newline in a file takes two bytes), so the files together must come in under 2 MiB once escaped. A CSV may start with a UTF-8 byte-order mark (U+FEFF); it is ignored when parsing, and the recorded file hash still covers it",
               "type": "object"
             },
             "options": {
@@ -685,7 +685,7 @@
         },
         "stateful": true,
         "summary": "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason. Instead of dataset, give profile (a registered source adapter, listed by describe) with files and options, and the server runs that adapter on the file contents, each file's full text sent as a JSON string.",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       {
         "input_schema": {
@@ -2720,7 +2720,7 @@
                   "type": "string"
                 },
                 "input_json": {
-                  "description": "Canonical input JSON; null unless the host set BOXSCORE_TRACE_INPUTS=1",
+                  "description": "Canonical input JSON; null unless the host set BOXSCORE_TRACE_INPUTS=1, and always null for inspect_export, whose input is a whole export",
                   "type": [
                     "string",
                     "null"
@@ -2796,6 +2796,270 @@
         "stateful": true,
         "summary": "Read back a recorded invocation by trace_id: function, version, caller, hashes, status, and the revision and report it produced or read.",
         "version": "1.0.0"
+      },
+      {
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "description": "A label for the export, 1-120 characters, such as the file name; echoed in the result",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            "redact": {
+              "default": true,
+              "description": "Default true. A column whose header names a person, contact or account (resident, tenant, lessee, occupant, applicant, guarantor, email, mail, phone, ssn, ss, social, tax id, tin, dob, birth, card, bank, routing, license, licence, mobile, cell, tel, contact, address, first, last, full, customer, payee, owner, holder or household (the short ones, ss, tin, dob, tel, cell, mail, first, last and full, only as a whole word, so hotel does not match), or name anywhere in it unless every name directly follows account, gl, vendor, property, unit, column or report, as in Vendor Name or account_name) has its sample replaced by <redacted> whatever its kind. So does a text or integer column in which any value is an email address (contains @), a social security number shape (ddd-dd-dddd) or a 13 to 19 digit card number, whatever its header; and so does a text column (or an integer column with a value of 7 or more digits) of at least 8 values that are mostly different (more than half distinct, or at least 10 distinct values each repeated at most 3 times) unless its header has an identifier or label word (code, id, number, num, no, ref, #, account, unit, description, category; a qualified name header has it too; never with a person word or an unqualified name). Header cells are echoed too: a single cell that contains @, is mostly digits (a year or YYYY-MM is a label) or is longer than 40 characters is replaced by <redacted header N>; header_redacted says so. A banner above the header does not redact it. false returns real sample values and header cells for every column, so use it only when the file holds no personal data.",
+              "type": "boolean"
+            },
+            "text": {
+              "description": "The export's full text, as a JSON string. At most 2 MiB (the request cap); more is refused with INPUT_LIMIT. Comma, tab, semicolon or pipe separated; a leading byte-order mark is allowed and ignored.",
+              "maxLength": 2097152,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "text"
+          ],
+          "type": "object"
+        },
+        "name": "inspect_export",
+        "output_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "banner_rows": {
+              "description": "Rows before the header (a property name, a report title, a run date), as they are, with a control, invisible or non-space whitespace character written as U+XXXX; with redaction on, a cell that is an email address, a social security number or a card number shows <redacted>",
+              "items": {
+                "description": "A non-empty row before the header, cells joined by the delimiter, at most 200 characters; at most 10 rows are listed",
+                "type": "string"
+              },
+              "maxItems": 10,
+              "type": "array"
+            },
+            "bom": {
+              "description": "The text started with a byte-order mark (U+FEFF)",
+              "type": "boolean"
+            },
+            "columns": {
+              "description": "One entry per header cell, at most 256 (a wider table is refused with INPUT_LIMIT)",
+              "items": {
+                "properties": {
+                  "distinct_capped": {
+                    "description": "true when there are more than 1000 distinct values",
+                    "type": "boolean"
+                  },
+                  "distinct_count": {
+                    "description": "Distinct non-empty values, capped at 1000",
+                    "maximum": 1000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "fill_rate": {
+                    "description": "Non-empty values over data rows, as a two-place decimal string, rounded half up",
+                    "pattern": "^[0-9]+\\.[0-9]{2}$",
+                    "type": "string"
+                  },
+                  "index": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "description": "At least 90% of the non-empty values decide it. date: YYYY-MM-DD or MM/DD/YYYY. period: YYYY-MM or Mon YYYY. integer: whole numbers with no separators or decimals (not an identifier such as an account code or one with leading zeros, which is text). money: a decimal with optional sign, thousands separators, parentheses or a trailing minus. empty: no values. Otherwise text.",
+                    "enum": [
+                      "money",
+                      "integer",
+                      "date",
+                      "period",
+                      "empty",
+                      "text"
+                    ]
+                  },
+                  "name": {
+                    "description": "The header cell as header shows it: at most 200 characters, U+XXXX for a control, invisible or non-space whitespace character, <redacted header N> when header_redacted replaced it",
+                    "type": "string"
+                  },
+                  "redacted": {
+                    "type": "boolean"
+                  },
+                  "sample": {
+                    "description": "Up to 5 distinct non-empty values in first-seen order, each at most 80 characters, with a control, invisible or non-space whitespace character written as U+XXXX; [\"<redacted>\"] when the column is redacted; shortened when the result would exceed 256 KiB (see truncated)",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 5,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "name",
+                  "index",
+                  "kind",
+                  "fill_rate",
+                  "distinct_count",
+                  "distinct_capped",
+                  "sample",
+                  "redacted"
+                ],
+                "type": "object"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "data_row_count": {
+              "description": "Rows after the header, not counting footer rows or rows with every cell empty",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "dialect": {
+              "properties": {
+                "delimiter": {
+                  "description": "The delimiter under which the first 50 records have the most consistent cell count",
+                  "enum": [
+                    ",",
+                    "\t",
+                    ";",
+                    "|"
+                  ]
+                },
+                "line_ending": {
+                  "enum": [
+                    "lf",
+                    "crlf",
+                    "cr",
+                    "mixed"
+                  ]
+                },
+                "quote": {
+                  "enum": [
+                    "\"",
+                    "none"
+                  ]
+                }
+              },
+              "required": [
+                "delimiter",
+                "quote",
+                "line_ending"
+              ],
+              "type": "object"
+            },
+            "encoding": {
+              "const": "utf-8",
+              "description": "The input is already text, so this is always utf-8"
+            },
+            "encoding_note": {
+              "description": "Notes the byte-order mark when there was one; otherwise null",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "footer_row_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "footer_rows": {
+              "description": "Rows after the header whose first non-empty cell is a total, grand total, subtotal, summary or all properties token (total as the whole cell; the others anywhere in the cell; any case). At most 20 are listed; footer_row_count counts them all.",
+              "items": {
+                "properties": {
+                  "first_cell": {
+                    "description": "The matching cell, at most 80 characters",
+                    "type": "string"
+                  },
+                  "row": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "row",
+                  "first_cell"
+                ],
+                "type": "object"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "header": {
+              "items": {
+                "description": "A trimmed header cell, at most 200 characters, with a control, invisible or non-space whitespace character written as U+XXXX; <redacted header N> when header_redacted replaced it",
+                "type": "string"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "header_redacted": {
+              "description": "true when redaction replaced at least one header cell with <redacted header N> (a cell looks like data); always false with redact false",
+              "type": "boolean"
+            },
+            "header_row": {
+              "description": "0-based index of the first row whose cell count is the usual cell count of the rows after it (a tie goes to the row's own count) and that has at least two non-empty cells, every non-empty cell a non-numeric label (a four-digit year counts when the values below it are numbers) and at least half of all its cells labels; a row with no row after it qualifies on the label test alone. A shorter label row above it (more than half as many cells) is preferred when the values below are all text, or when no row has the usual count, and its missing names are <unnamed N>; a Key: line or a labelled date is a banner. Blank lines are not rows.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "redaction": {
+              "description": "Redaction applies to a column whose header names a person, contact or account (see the redact input) whatever its kind, to a text or integer column holding an email address, a social security number or a card number, and to text columns (or integer columns of 7 or more digit values) of at least 8 values that are mostly different unless the header has an identifier or label word",
+              "properties": {
+                "applied": {
+                  "description": "The request's redact flag: true when the redaction rule was in force",
+                  "type": "boolean"
+                },
+                "columns": {
+                  "description": "The redacted columns, by index (a name is not repeated here: the header may itself be a data row)",
+                  "items": {
+                    "properties": {
+                      "index": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "index"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "applied",
+                "columns"
+              ],
+              "type": "object"
+            },
+            "truncated": {
+              "description": "true when the serialized result would have exceeded 256 KiB and was shortened, first by dropping samples, then banner rows, then shortening names",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name",
+            "dialect",
+            "bom",
+            "encoding",
+            "encoding_note",
+            "header_row",
+            "header",
+            "header_redacted",
+            "banner_rows",
+            "footer_rows",
+            "footer_row_count",
+            "data_row_count",
+            "columns",
+            "redaction",
+            "truncated"
+          ],
+          "type": "object"
+        },
+        "stateful": false,
+        "summary": "Inspect an export before proposing a mapping: given the file's text it returns the shape (delimiter, header row, banner and footer rows, per-column kind, fill rate and distinct count) and up to five sample values per column, with free-text columns redacted by default. It returns shape and redacted samples, never the whole file.",
+        "version": "1.0.0"
       }
     ],
     "contract_version": "plat.ops/1",
@@ -2806,5 +3070,5 @@
     }
   },
   "status": "calculated",
-  "version": "1.3.0"
+  "version": "1.4.0"
 }

@@ -507,7 +507,7 @@ async fn describe_lists_the_snapshot_metrics_stateless() {
         .iter()
         .map(|c| c["name"].as_str().unwrap())
         .collect();
-    assert_eq!(calculations.len(), 12);
+    assert_eq!(calculations.len(), 13);
     assert_eq!(
         names[6..9],
         ["occupancy", "economic_occupancy", "delinquency"]

@@ -44,16 +44,10 @@ use super::source_registry::PropertyLane;
 pub const MARKET_RENT_MIN: f64 = 100.0;
 pub const MARKET_RENT_MAX: f64 = 25_000.0;
 
-/// Tokens that mark a Yardi total/subtotal/footer row that must never be a unit.
-/// `total` is matched exactly (avoid resident names like "Total Wine LLC");
-/// the multi-word phrases use substring `contains`.
-pub const FOOTER_TOKENS: &[&str] = &[
-    "total",
-    "all properties",
-    "grand total",
-    "subtotal",
-    "summary",
-];
+// The footer-token rule (`FOOTER_TOKENS`, `footer_match`, `is_footer_cell`)
+// lives in `crate::ontology` so the exact-cent core's `inspect_export` applies
+// the same rule without reaching into the legacy connectors.
+pub use crate::ontology::{footer_match, is_footer_cell, FOOTER_TOKENS};
 
 /// Properties whose third-party PM does NOT use ConcessionBurnOff to set active
 /// concessions. For these, "0 active concessions" downstream is the CORRECT
@@ -223,22 +217,6 @@ fn read_csv(path: &Path) -> Option<Table> {
         );
     }
     Some(Table { headers, rows })
-}
-
-/// True when a cell carries a vendor total/subtotal/footer token: `total`
-/// as an exact (case-insensitive) match, the multi-word phrases anywhere.
-pub fn is_footer_cell(cell: &str) -> bool {
-    FOOTER_TOKENS.iter().any(|token| footer_match(cell, token))
-}
-
-fn footer_match(cell: &str, token: &str) -> bool {
-    let s = cell.to_ascii_lowercase();
-    let s = s.trim();
-    if token == "total" {
-        s == token
-    } else {
-        s.contains(token)
-    }
 }
 
 // -----------------------------------------------------------------------------

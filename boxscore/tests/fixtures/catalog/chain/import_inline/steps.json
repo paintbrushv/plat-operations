@@ -1,5 +1,5 @@
 {
-  "description": "import_period@1.1.0 with an adapter profile and inline file contents: the quickstart actuals, budgets and snapshot sent as JSON strings through canonical.csv/1, then reviewed and listed; sources records each inline file's name, sha256 and byte count",
+  "description": "import_period@1.2.0 with an adapter profile and inline file contents: the quickstart actuals, budgets and snapshot sent as JSON strings through canonical.csv/1, then reviewed and listed; sources records each inline file's name, sha256 and byte count",
   "steps": [
     {
       "capture": {
@@ -11,7 +11,7 @@
           "revision_id": "<id>"
         },
         "status": "calculated",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       "function": "import_period",
       "input": {

@@ -274,3 +274,223 @@ async fn issue_runs_in_a_transaction_and_refuses_a_superseded_revision() {
     store::issue(&pool, &second).await.unwrap();
     assert_eq!(reports(second).await, 2);
 }
+
+fn refusal(data: &Dataset) -> String {
+    let error = data.validate().unwrap_err();
+    assert_eq!(error.code, "INVALID_INPUT");
+    error.message
+}
+
+// UPL-102: invisible characters in an account identity or category refuse at
+// import, naming the list, row, field and code point.
+#[test]
+fn control_and_format_characters_in_account_fields_refuse() {
+    // The UPL-102 repro: a byte-order mark glued to a category.
+    let mut data = dataset();
+    data.actuals[0].category = "\u{FEFF}rental income".into();
+    let message = refusal(&data);
+    assert!(
+        message.contains("actuals[0].category") && message.contains("U+FEFF"),
+        "{message}"
+    );
+
+    // A zero-width space in an account code, in a budget row.
+    let mut data = dataset();
+    data.budgets[0].account_code = "40\u{200B}00".into();
+    let message = refusal(&data);
+    assert!(
+        message.contains("budgets[0].account_code") && message.contains("U+200B"),
+        "{message}"
+    );
+
+    // A control character in an account name (here a tab), second row.
+    let mut data = dataset();
+    let mut second = data.actuals[0].clone();
+    second.account_code = "4010".into();
+    second.account_name = "Late\tFees".into();
+    data.actuals.push(second);
+    let message = refusal(&data);
+    assert!(
+        message.contains("actuals[1].account_name") && message.contains("U+0009"),
+        "{message}"
+    );
+
+    // The ranges the issue names, and a few more format characters.
+    for c in [
+        '\u{200B}', '\u{200F}', '\u{2028}', '\u{202E}', '\u{2060}', '\u{2064}', '\u{FEFF}',
+        '\u{00AD}', '\u{0000}', '\u{007F}', '\u{0085}',
+    ] {
+        let mut data = dataset();
+        data.actuals[0].account_name = format!("Rent{c}");
+        let message = refusal(&data);
+        assert!(
+            message.contains(&format!("U+{:04X}", c as u32)),
+            "{message}"
+        );
+    }
+
+    // Ordinary non-ASCII text and punctuation still import.
+    for ok in [
+        "Caf\u{e9} income",
+        "Rent & Fees",
+        "Zimmerm\u{e4}dchen",
+        "\u{4e2d}\u{6587}",
+    ] {
+        let mut data = dataset();
+        data.actuals[0].account_name = ok.into();
+        data.validate().unwrap();
+    }
+}
+
+// Whitespace other than a plain space looks like a space and does not compare
+// equal to one: "Rental\u{A0}Income" and "Rental Income" are two categories.
+#[test]
+fn whitespace_other_than_a_plain_space_refuses_and_is_flagged_on_stored_data() {
+    let mut data = dataset();
+    data.actuals[0].category = "Rental\u{A0}Income".into();
+    data.budgets[0].category = "Rental\u{A0}Income".into();
+    let message = refusal(&data);
+    assert!(
+        message.contains("actuals[0].category") && message.contains("U+00A0"),
+        "{message}"
+    );
+    assert!(data.validate_stored().is_ok());
+    assert!(data.has_hidden_characters());
+
+    // Every Unicode space, the line separators and the invisible fillers.
+    for c in [
+        '\u{A0}', '\u{1680}', '\u{2000}', '\u{2005}', '\u{200A}', '\u{202F}', '\u{205F}',
+        '\u{3000}', '\u{2028}', '\u{2029}', '\u{034F}', '\u{180B}', '\u{180C}', '\u{180D}',
+        '\u{180F}', '\u{FE00}', '\u{FE0F}', '\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}',
+        '\u{2800}',
+    ] {
+        let mut data = dataset();
+        data.budgets[0].account_name = format!("Rent{c}Fees");
+        let message = refusal(&data);
+        assert!(
+            message.contains(&format!("U+{:04X}", c as u32)),
+            "{message}"
+        );
+        assert!(data.has_hidden_characters(), "U+{:04X}", c as u32);
+    }
+    // A plain space, and the characters next to the ranges, are fine.
+    for ok in ["Rental Income", "Rent\u{FE10}", "Rent\u{180}", "a b  c"] {
+        let mut data = dataset();
+        data.actuals[0].category = ok.into();
+        data.budgets[0].category = ok.into();
+        data.validate().unwrap();
+        assert!(!data.has_hidden_characters(), "{ok:?}");
+    }
+}
+
+// The property keys the revision chain: a hidden character in it would start a
+// second chain for what looks like the same property.
+#[tokio::test]
+async fn a_property_with_a_hidden_character_is_refused_instead_of_forking_a_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = store::create(&tmp.path().join("exact.sqlite"))
+        .await
+        .unwrap();
+    let mut data = dataset();
+    data.snapshot = None;
+    let first = store::import(&pool, &data, None, None, &serde_json::json!({}))
+        .await
+        .unwrap();
+    for hidden in [
+        "Sample\u{200B}Gardens",
+        "Sample\u{A0}Gardens",
+        "Sample\u{FEFF}Gardens",
+    ] {
+        let mut forked = data.clone();
+        forked.property = hidden.into();
+        let message = refusal(&forked);
+        assert!(
+            message.starts_with("property contains the invisible character U+"),
+            "{message}"
+        );
+        assert!(forked.has_hidden_characters());
+        assert!(forked.validate_stored().is_ok());
+        let error = store::import(&pool, &forked, None, None, &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_INPUT");
+    }
+    let message = {
+        let mut forked = data.clone();
+        forked.property = "Sample\u{200B}Gardens".into();
+        refusal(&forked)
+    };
+    assert!(message.contains("U+200B"), "{message}");
+    // Nothing was stored for the lookalikes: one revision, one chain.
+    let revisions: i64 = sqlx::query_scalar("SELECT count(*) FROM exact_revisions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(revisions, 1, "{first}");
+    assert!(!data.has_hidden_characters());
+}
+
+// The character rule applies to new imports. A revision stored before the rule
+// (here written straight through SQL, bypassing `validate`, as old data would
+// be) is still reviewed, and the review says it holds invisible characters.
+#[tokio::test]
+async fn a_revision_stored_with_an_invisible_character_is_still_reviewable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = store::create(&tmp.path().join("exact.sqlite"))
+        .await
+        .unwrap();
+    let mut data = dataset();
+    data.snapshot = None;
+    data.actuals[0].account_name = "Re\u{200B}nt".into();
+    assert!(data.validate().is_err());
+    assert!(data.validate_stored().is_ok());
+    assert!(data.has_hidden_characters());
+    assert!(!dataset().has_hidden_characters());
+    // New imports refuse and store nothing.
+    assert_eq!(
+        store::import(&pool, &data, None, None, &serde_json::json!({}))
+            .await
+            .unwrap_err()
+            .code,
+        "INVALID_INPUT"
+    );
+
+    let id = "legacy-revision";
+    let hash = boxscore::exact::digest(&serde_json::to_vec(&data).unwrap());
+    sqlx::query("INSERT INTO exact_revisions VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .bind(id)
+        .bind(&data.property)
+        .bind(&data.period)
+        .bind(1_i64)
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(data.unit_count)
+        .bind(&hash)
+        .bind("{}")
+        .bind("2026-05-31T00:00:00Z")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (kind, rows) in [("actual", &data.actuals), ("budget", &data.budgets)] {
+        for (i, row) in rows.iter().enumerate() {
+            sqlx::query("INSERT INTO exact_gl VALUES (?,?,?,?,?,?,?)")
+                .bind(id)
+                .bind(kind)
+                .bind(i as i64)
+                .bind(&row.account_code)
+                .bind(&row.account_name)
+                .bind(&row.category)
+                .bind(row.amount.cents())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+    let review = store::review(&pool, id).await.unwrap();
+    assert_eq!(review["status"], "review_required");
+    let reasons = review["variance"]["review_reasons"].as_array().unwrap();
+    assert!(
+        reasons.contains(&serde_json::json!("invisible_characters")),
+        "{reasons:?}"
+    );
+}

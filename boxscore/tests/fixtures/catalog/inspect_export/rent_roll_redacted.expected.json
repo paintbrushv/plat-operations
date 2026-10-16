@@ -1,0 +1,129 @@
+{
+  "output_sha256": "729585454facfcf6f0b096459ef9e3946b2ddf0d7637c4b112939da6924d545b",
+  "result": {
+    "banner_rows": [],
+    "bom": false,
+    "columns": [
+      {
+        "distinct_capped": false,
+        "distinct_count": 12,
+        "fill_rate": "1.00",
+        "index": 0,
+        "kind": "text",
+        "name": "Unit",
+        "redacted": false,
+        "sample": [
+          "A101",
+          "A102",
+          "A103",
+          "A104",
+          "A105"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 12,
+        "fill_rate": "1.00",
+        "index": 1,
+        "kind": "text",
+        "name": "Resident",
+        "redacted": true,
+        "sample": [
+          "<redacted>"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 12,
+        "fill_rate": "1.00",
+        "index": 2,
+        "kind": "text",
+        "name": "Email",
+        "redacted": true,
+        "sample": [
+          "<redacted>"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 12,
+        "fill_rate": "1.00",
+        "index": 3,
+        "kind": "date",
+        "name": "Lease Start",
+        "redacted": false,
+        "sample": [
+          "2025-01-01",
+          "2025-02-01",
+          "2025-03-01",
+          "2025-04-01",
+          "2025-05-01"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 12,
+        "fill_rate": "1.00",
+        "index": 4,
+        "kind": "money",
+        "name": "Monthly Rent",
+        "redacted": false,
+        "sample": [
+          "1,200.00",
+          "1,225.00",
+          "1,250.00",
+          "1,275.00",
+          "1,300.00"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 2,
+        "fill_rate": "1.00",
+        "index": 5,
+        "kind": "text",
+        "name": "Status",
+        "redacted": false,
+        "sample": [
+          "Occupied",
+          "Vacant"
+        ]
+      }
+    ],
+    "data_row_count": 12,
+    "dialect": {
+      "delimiter": ",",
+      "line_ending": "lf",
+      "quote": "\""
+    },
+    "encoding": "utf-8",
+    "encoding_note": null,
+    "footer_row_count": 0,
+    "footer_rows": [],
+    "header": [
+      "Unit",
+      "Resident",
+      "Email",
+      "Lease Start",
+      "Monthly Rent",
+      "Status"
+    ],
+    "header_redacted": false,
+    "header_row": 0,
+    "name": "synthetic-rent-roll.csv",
+    "redaction": {
+      "applied": true,
+      "columns": [
+        {
+          "index": 1
+        },
+        {
+          "index": 2
+        }
+      ]
+    },
+    "truncated": false
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

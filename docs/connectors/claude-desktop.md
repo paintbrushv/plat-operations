@@ -61,6 +61,7 @@ with `isError: true` and its typed `error.code`; it is not a protocol error.
 | `close_readiness` | yes | Per-property close readiness for a period: latest revision, account coverage, blocking review reasons, issued reports, and what the store does not track. |
 | `t12` | yes | Trailing twelve-period statement for a property from stored revisions; a month with no revision is null and flagged, never zero. |
 | `get_provenance` | yes | Reads back a recorded invocation by `trace_id`: function, version, caller, hashes, status, and the revision and report it produced or read. |
+| `inspect_export` | no | Inspect an export before proposing a mapping: takes the file's text and returns its shape (delimiter, header row, banner and footer rows, column kinds, fill rates) and up to five sample values per column, with free-text columns redacted by default. It returns shape and redacted samples, never the whole file. |
 
 Money in and out is a decimal string with at most two places (`"100.10"`),
 never a JSON number. In an MCP response, `input_sha256` is the SHA-256 of the
