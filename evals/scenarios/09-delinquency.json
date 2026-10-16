@@ -1,0 +1,50 @@
+{
+  "id": "delinquency",
+  "title": "Delinquent balance and its share of in-place rent",
+  "setup": [
+    {
+      "args": [
+        "init",
+        "--database",
+        "{db}"
+      ]
+    },
+    {
+      "args": [
+        "import-csv",
+        "--database",
+        "{db}",
+        "--actuals",
+        "{repo}/docs/quickstart/actuals.csv",
+        "--budgets",
+        "{repo}/docs/quickstart/budgets.csv",
+        "--snapshot",
+        "{repo}/docs/quickstart/snapshot.json",
+        "--property",
+        "Sample Gardens",
+        "--period",
+        "2026-05",
+        "--units",
+        "24"
+      ],
+      "save_revision_as": "may"
+    }
+  ],
+  "question": "How much is delinquent at Sample Gardens for 2026-05, and what share of rent is that?",
+  "expect": {
+    "tools": [
+      {
+        "function": "delinquency",
+        "args_include": {
+          "revision_id": "{rev.may}"
+        }
+      }
+    ],
+    "must_mention": [
+      "result.delinquent_amount",
+      "result.delinquent_share_of_in_place_rent.decimal"
+    ],
+    "must_not_contain_numbers": false,
+    "max_tokens": 1024
+  }
+}

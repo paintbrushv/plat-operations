@@ -1,0 +1,54 @@
+{
+  "id": "close_readiness_may",
+  "title": "Close readiness for 2026-05",
+  "setup": [
+    {
+      "args": [
+        "init",
+        "--database",
+        "{db}"
+      ]
+    },
+    {
+      "args": [
+        "import-csv",
+        "--database",
+        "{db}",
+        "--actuals",
+        "{repo}/docs/quickstart/actuals.csv",
+        "--budgets",
+        "{repo}/docs/quickstart/budgets.csv",
+        "--snapshot",
+        "{repo}/docs/quickstart/snapshot.json",
+        "--property",
+        "Sample Gardens",
+        "--period",
+        "2026-05",
+        "--units",
+        "24"
+      ],
+      "save_revision_as": "may"
+    }
+  ],
+  "question": "Is Sample Gardens ready to close for 2026-05?",
+  "expect": {
+    "tools": [
+      {
+        "function": "close_readiness",
+        "args_include": {
+          "period": "2026-05"
+        }
+      }
+    ],
+    "must_include_text": [
+      [
+        "not_ready",
+        "not ready",
+        "not yet ready"
+      ]
+    ],
+    "must_mention": [],
+    "must_not_contain_numbers": false,
+    "max_tokens": 1024
+  }
+}
