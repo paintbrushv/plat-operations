@@ -11,6 +11,8 @@
 //!
 //! Raw input is stored only when `BOXSCORE_TRACE_INPUTS=1`, so whoever runs
 //! the host decides whether operating numbers are retained beyond their hash.
+//! `inspect_export` is the exception: its input is a whole export, so it is
+//! never retained, whatever the host sets (see [`retains_input`]).
 use super::{error, store, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -51,6 +53,17 @@ pub struct Invocation {
 /// Whether the host asked for raw inputs to be retained.
 pub fn keep_inputs() -> bool {
     std::env::var(TRACE_INPUTS_ENV).is_ok_and(|v| v == "1")
+}
+
+/// Functions whose input is never retained, even when the host asked for raw
+/// inputs: `inspect_export` takes the full text of an export, which holds the
+/// personal data the function exists to keep out of its result. Its trace
+/// still records the input hash.
+const NEVER_RETAINED: [&str; 1] = ["inspect_export"];
+
+/// Whether the raw input of a call to `function` is retained in its trace.
+pub fn retains_input(function: &str) -> bool {
+    keep_inputs() && !NEVER_RETAINED.contains(&function)
 }
 
 fn short(hash: &str) -> &str {

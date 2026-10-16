@@ -1,0 +1,99 @@
+{
+  "output_sha256": "4c932b2074b0d7deab5fac7ff4badf6b5db8d48bd55da91c1a6379ca658e05aa",
+  "result": {
+    "banner_rows": [],
+    "bom": false,
+    "columns": [
+      {
+        "distinct_capped": false,
+        "distinct_count": 10,
+        "fill_rate": "1.00",
+        "index": 0,
+        "kind": "text",
+        "name": "account_code",
+        "redacted": false,
+        "sample": [
+          "4000",
+          "4010",
+          "4020",
+          "4100",
+          "5000"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 10,
+        "fill_rate": "1.00",
+        "index": 1,
+        "kind": "text",
+        "name": "account_name",
+        "redacted": false,
+        "sample": [
+          "Gross Potential Rent",
+          "Concessions",
+          "Bad Debt",
+          "Other Income",
+          "Payroll"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 10,
+        "fill_rate": "1.00",
+        "index": 2,
+        "kind": "text",
+        "name": "category",
+        "redacted": false,
+        "sample": [
+          "rental income",
+          "concessions",
+          "bad debt",
+          "other income",
+          "payroll"
+        ]
+      },
+      {
+        "distinct_capped": false,
+        "distinct_count": 10,
+        "fill_rate": "1.00",
+        "index": 3,
+        "kind": "money",
+        "name": "amount",
+        "redacted": false,
+        "sample": [
+          "36000.00",
+          "-1200.00",
+          "-600.00",
+          "900.00",
+          "8000.00"
+        ]
+      }
+    ],
+    "data_row_count": 10,
+    "dialect": {
+      "delimiter": ",",
+      "line_ending": "lf",
+      "quote": "none"
+    },
+    "encoding": "utf-8",
+    "encoding_note": null,
+    "footer_row_count": 0,
+    "footer_rows": [],
+    "header": [
+      "account_code",
+      "account_name",
+      "category",
+      "amount"
+    ],
+    "header_redacted": false,
+    "header_row": 0,
+    "name": "actuals.csv",
+    "redaction": {
+      "applied": true,
+      "columns": []
+    },
+    "truncated": false
+  },
+  "status": "calculated",
+  "version": "1.0.0"
+}

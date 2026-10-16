@@ -1,6 +1,7 @@
 //! Released USD operating calculations. Legacy floating-point features are separate.
 pub mod catalog;
 pub mod ingest;
+pub mod inspect;
 pub mod mcp;
 pub mod mcp_http;
 pub mod migration;

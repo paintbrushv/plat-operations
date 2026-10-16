@@ -60,7 +60,7 @@ async fn fresh_database(dir: &Path) -> PathBuf {
 async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
     let envelope = catalog::invoke(&call("describe", json!({}), None)).await;
     assert_eq!(envelope.status, "calculated");
-    assert_eq!(envelope.version, Some("1.3.0"));
+    assert_eq!(envelope.version, Some("1.4.0"));
     assert_eq!(envelope.contract_version, "plat.ops/1");
     assert_eq!(envelope.producer["arithmetic"], "checked_i64_cents");
     assert_eq!(envelope.producer["name"], "boxscore-exact");
@@ -90,7 +90,8 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
             "delinquency",
             "close_readiness",
             "t12",
-            "get_provenance"
+            "get_provenance",
+            "inspect_export"
         ]
     );
     for entry in result["calculations"].as_array().unwrap() {
@@ -106,7 +107,7 @@ async fn describe_lists_every_function_with_schemas_and_a_hashed_envelope() {
         result["calculations"].as_array().unwrap().len(),
         CATALOG.len()
     );
-    assert_eq!(CATALOG.len(), 12);
+    assert_eq!(CATALOG.len(), 13);
 }
 
 #[tokio::test]
@@ -164,7 +165,7 @@ async fn refusals_keep_the_envelope_and_name_the_cause() {
     pinned.version = Some("2.0.0".into());
     let mismatch = catalog::invoke(&pinned).await;
     assert_eq!(mismatch.error.as_ref().unwrap()["code"], "VERSION_MISMATCH");
-    assert_eq!(mismatch.version, Some("1.3.0"));
+    assert_eq!(mismatch.version, Some("1.4.0"));
 
     let stateless =
         catalog::invoke(&call("review_period", json!({"revision_id": "x"}), None)).await;
@@ -321,6 +322,10 @@ fn golden_inputs_agree_with_their_input_schemas() {
         ),
         ("t12", json!({"property": "p", "end_period": "2026-05"})),
         ("get_provenance", json!({"trace_id": "t1"})),
+        (
+            "inspect_export",
+            json!({"name": "actuals.csv", "text": "a,b\n1,2\n", "redact": false}),
+        ),
     ];
     // The snapshot metrics take either a stored revision or an inline
     // snapshot; each form is a golden input against the same schema.

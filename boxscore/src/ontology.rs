@@ -65,6 +65,37 @@ pub fn economic_occupancy(in_place_rent_total: f64, market_rent_total: f64) -> O
     (market_rent_total.abs() > f64::EPSILON).then(|| in_place_rent_total / market_rent_total)
 }
 
+/// The footer-token rule shared by the standardized-CSV validator and the
+/// exact-cent core's `inspect_export`.
+///
+/// Tokens that mark a Yardi total/subtotal/footer row that must never be a unit.
+/// `total` is matched exactly (avoid resident names like "Total Wine LLC");
+/// the multi-word phrases use substring `contains`.
+pub const FOOTER_TOKENS: &[&str] = &[
+    "total",
+    "all properties",
+    "grand total",
+    "subtotal",
+    "summary",
+];
+
+/// True when a cell carries a vendor total/subtotal/footer token: `total`
+/// as an exact (case-insensitive) match, the multi-word phrases anywhere.
+pub fn is_footer_cell(cell: &str) -> bool {
+    FOOTER_TOKENS.iter().any(|token| footer_match(cell, token))
+}
+
+/// Whether `cell` matches one footer `token` under the rule above.
+pub fn footer_match(cell: &str, token: &str) -> bool {
+    let s = cell.to_ascii_lowercase();
+    let s = s.trim();
+    if token == "total" {
+        s == token
+    } else {
+        s.contains(token)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

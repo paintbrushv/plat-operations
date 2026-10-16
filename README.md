@@ -103,6 +103,7 @@ server or command with `--database`; the input can never name a path.
 | `close_readiness` | which properties are ready to close a period, and what blocks the rest | yes |
 | `t12` | the trailing twelve-month statement, with missing months flagged, never zero | yes |
 | `get_provenance` | which call produced this citation, from what input, and which revision and report it touched | yes |
+| `inspect_export` | what does this export look like (delimiter, header, banner and footer rows, column kinds, a few redacted sample values), before anyone proposes a mapping | no |
 
 The contract, envelope and versioning policy are in
 [docs/EXACT_CENTS.md](docs/EXACT_CENTS.md#calculation-catalog-and-versioning-policy).
@@ -190,8 +191,6 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo fmt --check
 ```
-
-Agent grounding evals (a model against the MCP server, scored on whether every number came from the engine): [`evals/`](evals/README.md). Their offline tests run with `python3 -m pytest evals/`; the live run is manual and is not part of CI.
 
 ## Honesty section (read before adopting)
 

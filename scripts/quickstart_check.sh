@@ -62,7 +62,7 @@ DB=./exact.sqlite
 echo "== describe"
 echo '{}' | boxscore-exact call --function describe > describe.json
 expect "describe status" "$(jget status < describe.json)" calculated
-expect "catalog size" "$(jget result.calculations < describe.json | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))')" 12
+expect "catalog size" "$(jget result.calculations < describe.json | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))')" 13
 
 echo "== init and import"
 boxscore-exact init --database "$DB" > init.json

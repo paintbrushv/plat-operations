@@ -1,0 +1,5 @@
+{
+  "name": "synthetic-rent-roll.csv",
+  "text": "Unit,Resident,Email,Lease Start,Monthly Rent,Status\nA101,Resident A,resident.a@example.test,2025-01-01,\"1,200.00\",Occupied\nA102,Resident B,resident.b@example.test,2025-02-01,\"1,225.00\",Occupied\nA103,Resident C,resident.c@example.test,2025-03-01,\"1,250.00\",Occupied\nA104,Resident D,resident.d@example.test,2025-04-01,\"1,275.00\",Occupied\nA105,Resident E,resident.e@example.test,2025-05-01,\"1,300.00\",Occupied\nA106,Resident F,resident.f@example.test,2025-06-01,\"1,325.00\",Vacant\nA107,Resident G,resident.g@example.test,2025-07-01,\"1,350.00\",Occupied\nA108,Resident H,resident.h@example.test,2025-08-01,\"1,375.00\",Occupied\nA109,Resident I,resident.i@example.test,2025-09-01,\"1,400.00\",Occupied\nA110,Resident J,resident.j@example.test,2025-10-01,\"1,425.00\",Occupied\nA111,Resident K,resident.k@example.test,2025-11-01,\"1,450.00\",Occupied\nA112,Resident L,resident.l@example.test,2025-12-01,\"1,475.00\",Occupied\n",
+  "redact": false
+}

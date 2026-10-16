@@ -58,7 +58,43 @@ write and version a new adapter is in `boxscore/docs/DATA_CONTRACTS.md`.
 Canonical CSV headers: `account_code,account_name,category,amount`. Monetary
 cells are decimal text, for example `100.10`, `-5.01`, or `0.00`. Vendor exports
 must first be mapped to this schema; this command does not infer their layout,
-account approval, signs, or currency. Classification uses the existing Rust
+account approval, signs, or currency.
+
+Two rules keep invisible characters out of the exact core:
+
+- **Byte-order mark.** The canonical CSV adapter ignores a leading UTF-8
+  byte-order mark (`EF BB BF`) when it parses, so a file saved by a
+  spreadsheet imports. The per-file hash it records (`actuals_sha256`,
+  `budgets_sha256`, and the inline `files[].sha256`) is the hash of the bytes as
+  received, mark included, so it matches the file on disk. The dataset-level
+  `input_sha256` hashes the parsed dataset, so it is the same with or without
+  the mark. A second leading mark is refused with `INVALID_INPUT` naming
+  U+FEFF (the CSV reader would otherwise drop it without a word).
+- **Control, format and whitespace characters.** A `property`, `account_code`,
+  `account_name` or `category` containing a Unicode control character
+  (`char::is_control`, category Cc), an invisible format character (category Cf,
+  for example U+200B to U+200F, U+2028 to U+202E, U+2060 to U+2064 and U+FEFF),
+  an invisible filler or variation selector (U+034F, U+115F, U+1160,
+  U+180B to U+180F, U+2800, U+3164, U+FE00 to U+FE0F, U+FFA0) or any whitespace
+  other than a plain space U+0020 (a no-break space U+00A0, U+2000 to U+200A,
+  U+202F, U+205F, U+3000 and the line separators) refuses with
+  `INVALID_INPUT`, naming the list, the 0-based row index, the field and the code
+  point (for example `actuals[3].category contains the invisible character
+  U+FEFF`; for the property, `property contains the invisible character
+  U+200B`, since a hidden character there would start a second revision chain
+  for what looks like the same property). Such a character is invisible or
+  looks like a space in a spreadsheet and would make two accounts that look
+  identical compare unequal. The rule applies to new
+  imports (every form, and the CSV adapter): `Dataset::validate` refuses, and
+  `Dataset::validate_stored`, which `review_period` uses, does not. A revision
+  stored before the rule stays reviewable, and its review carries the review
+  reason `invisible_characters` (status `review_required`) so the characters are
+  not silently accepted; correct it by importing a cleaned dataset as a
+  correction. A reviewed copy migration (`migrate`) treats legacy rows the same
+  way: a legacy character does not block the copy, the plan lists it as an
+  `invisible_characters` difference, and the copied revision's review carries
+  the same reason.
+ Classification uses the existing Rust
 ontology: rental income, concessions, bad debt, and other income are revenue;
 `unmapped` is disclosed separately; other supplied categories are expenses.
 Supply expenses as positive costs, credits as negatives, and contra-revenue as
@@ -133,9 +169,9 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 
 | function | stateful | what it returns |
 |---|---|---|
-| `describe@1.3.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
+| `describe@1.4.0` | no | the catalog with JSON Schemas for every function, plus `adapters` (the source adapter specs) |
 | `noi_variance@1.0.0` | no | the `plat.ops/1` variance bridge from inline rows |
-| `import_period@1.1.0` | yes | `revision_id` for a canonical dataset, or for an adapter profile run on inline file contents (`supersedes` + `reason` for corrections) |
+| `import_period@1.2.0` | yes | `revision_id` for a canonical dataset, or for an adapter profile run on inline file contents (`supersedes` + `reason` for corrections); 1.2.0 ignores a leading byte-order mark on a CSV and refuses control, invisible format and non-space whitespace characters in the property and account fields (see Canonical data) |
 | `review_period@1.0.0` | yes | the same body as `review` |
 | `issue_report@1.1.0` | yes | the same body as `issue`; refuses `SUPERSEDED` for a revision a correction has superseded, naming the latest revision (1.1.0 adds that refusal; no number changes for a latest revision) |
 | `list_revisions@1.0.0` | yes | stored revisions and their issued reports |
@@ -145,6 +181,84 @@ echo '{"revision_id":"REVISION_ID"}' | boxscore-exact call --database ./exact.sq
 | `close_readiness@1.0.0` | yes | per property with a revision for `period` (optionally one `property`): the latest revision, `ready` or `not_ready`, account coverage counts, blocking review reasons from `review_period`, issued reports, and `not_tracked_in_exact_store` |
 | `t12@1.0.0` | yes | trailing twelve-period statement for `property` ending at `end_period`: category rows, NOI, budgets and actual-minus-budget NOI per month, the revision used for each month, and `missing_periods`; refuses `NOT_FOUND` when the property has no revision in the window |
 | `get_provenance@1.0.0` | yes | the recorded invocation for a `trace_id`, with the revision (`sources`, `reason`, parent) and report hash it names; unknown ids refuse `NOT_FOUND` |
+| `inspect_export@1.0.0` | no | the shape of an export's text before a mapping is proposed: dialect, header row, banner and footer rows, per-column kind, fill rate, distinct count and up to five sample values (free-text columns redacted by default), never the whole file |
+
+`inspect_export` takes `{"name": "<label, 1-120 characters>", "text": "<the export's text>", "redact": true}`
+(`redact` defaults to true; unknown fields refuse) and is stateless: it opens no
+database and takes no path. It reads the text as delimited rows (comma, tab,
+semicolon or pipe, chosen by the most consistent cell count over the first 50
+records) and reports the dialect (`delimiter`, `quote`, `line_ending` of `lf`,
+`crlf`, `cr` or `mixed`), `bom`, the `header_row` (the first row with the usual
+cell count of the rows below it, a tie going to its own count, with at least two
+non-empty cells, every non-empty cell a non-numeric label and at least half of
+all cells labels; a four-digit year counts as a label when the values below it
+are numbers; a row with nothing after it is the header of a file with no data;
+a shorter label row above the chosen one (a header with fewer cells than its data, more than half as many) is preferred when the values below are all text like the chosen row, or when no row has the usual cell count, and its missing names are numbered `<unnamed N>`; a `Key:` line or a labelled date such as `Run Date,10/16/2026` is a banner),
+the `banner_rows` above it (at most 10 rows of at most 200 characters), the
+`footer_rows` after it (a first non-empty
+cell that is a total, grand total, subtotal, summary or all properties token,
+by the same rule as the standardized-CSV validator; at most 20 listed, all
+counted in `footer_row_count`), `data_row_count`, and per column (at most 256;
+a row with more than 256 cells anywhere in the text refuses `INPUT_LIMIT` as it
+is read) a `kind` (`money`, `integer`, `date`,
+`period`, `empty` or `text`; a `$` in front of or behind a number, inside or
+outside parentheses, still makes it `money`; a whole-number column headed
+`code`, `id`, `number`, `num`, `no`, `ref`, `#`, `account` or `unit`, or with
+leading zeros, is `text`), `fill_rate`, `distinct_count` (capped at 1000,
+`distinct_capped` when it is), and a `sample` of up to five distinct values of
+at most 80 characters each.
+
+Everything echoed from the file is bounded by bytes: a control, invisible or
+non-space whitespace character in a header cell, column name, banner row, footer
+cell or sample is written as `U+XXXX` text before the length caps apply, and the
+serialized result is held to 256 KiB by dropping samples first, then banner
+rows, then shortening names, with `truncated: true`. A text longer than 2 MiB is
+refused first.
+
+With `redact` true (the default), a column is redacted, its sample replaced by
+`["<redacted>"]` and listed in `redaction.columns` by `{index}`:
+
+- when its header names a person, contact or account, whatever the column's
+  kind (text, integer, money, date or period). The words are `resident`,
+  `tenant`, `lessee`, `occupant`, `applicant`, `guarantor`, `email`, `phone`,
+  `ssn`, `contact`, `address`, `social`, `birth`, `card`, `bank`, `routing`,
+  `license`, `licence`, `mobile`, `customer`, `payee`, `owner`, `holder` and `household`
+  (any case, as a word or part of one), and `ss`, `tin`, `dob`, `tel`, `cell`,
+  `mail`, `first`, `last`, `full` and `tax id` (whole words only, camel case
+  counted as words, so `Hotel` is not redacted and a `Lease Start` date is
+  not either), and `name` anywhere in the header (so `FirstName`, `FullName` and
+  `Name` match) unless every `name` directly follows `account`, `gl`, `vendor`,
+  `property`, `unit`, `column` or `report` (any case, with spaces, `_` or `-`
+  between, or camel case) and there is no person word (so `Resident Name`,
+  `Name` and `Name / Unit` are redacted; `account_name`, `AccountName` and
+  `Vendor Name` are not);
+- when it is a text or integer column and any value contains `@`, matches
+  `ddd-dd-dddd` or is a 13 to 19 digit card number (spaces and hyphens allowed),
+  whatever the header says;
+- when it is a text column, or an integer column with a value of 7 or more
+  digits, with at least 8 non-empty values that are mostly different (more than
+  half distinct, or at least 10 distinct values each repeated at most three
+  times, which is how a rent roll lists a resident once per charge), unless the
+  header has an identifier or label word (`code`, `id`, `number`, `num`, `no`,
+  `ref`, `#`, `account`, `unit`, `description`, `category`), so unit ids and
+  account descriptions stay visible and a memo or note column does not. The
+  exemption never applies to a header with a person word or an unqualified
+  `name`, and a qualified name header (`Vendor Name`) has it too.
+
+The header is echoed too, so it is checked the same way. A single header cell
+that contains `@`, is mostly digits (a year such as `2025` or a `YYYY-MM` period
+is a label) or is longer than 40 characters is replaced in `header` and
+`columns[].name` by `<redacted header N>` (N the column index), and
+`header_redacted` is `true` when any cell was. A banner above the header (even
+one with two filled cells, such as `Run Date,10/16/2026`) does not redact it;
+a person word in a skipped row's cell still flags the column under it. A banner or footer
+cell that is an email address, a social security number or a card number shows
+`<redacted>`. `redact: false` turns all of it off. The trace of an
+`inspect_export` call never keeps its input, even with `BOXSCORE_TRACE_INPUTS=1`
+(only the input hash is recorded), because the input is a whole export. Text over 2 MiB, or an empty text or one with no row of two or more
+cells (`no table found`), refuses. The result is bounded whatever the input and
+is the only thing the agent sees of the file. It does not map anything: it is
+what the caller reads before proposing a mapping.
 
 The three snapshot metrics (`occupancy`, `economic_occupancy`, `delinquency`) take exactly one of `{"revision_id": "..."}` or
 `{"snapshot": {...}, "unit_count": N}`. They are not stateful: with an inline

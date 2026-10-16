@@ -59,7 +59,7 @@ Each record has these fields: `trace_id`, `function`, `version`,
 
 | variable | effect |
 |---|---|
-| `BOXSCORE_TRACE_INPUTS=1` | also store the canonical JSON of the input in `input_json`. Without it `input_json` is NULL and only the hash is kept, so the trace stores no operating numbers. Whoever runs the host decides whether to set it. |
+| `BOXSCORE_TRACE_INPUTS=1` | also store the canonical JSON of the input in `input_json`. Without it `input_json` is NULL and only the hash is kept, so the trace stores no operating numbers. Whoever runs the host decides whether to set it. `inspect_export` is never retained, whatever the setting (its input is a whole export); its trace keeps the input hash only. |
 | `BOXSCORE_TRACE_DIR=<dir>` | the directory for the JSONL trace when no database is in use. |
 
 `input_json` is the canonical serialization: keys sorted, no whitespace. When

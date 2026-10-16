@@ -173,7 +173,7 @@ fn stateless_session_lists_tools_calls_them_and_survives_bad_input() {
 
     let listed = s.request(2, "tools/list", json!({}));
     let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 13);
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
@@ -189,7 +189,8 @@ fn stateless_session_lists_tools_calls_them_and_survives_bad_input() {
             "delinquency",
             "close_readiness",
             "t12",
-            "get_provenance"
+            "get_provenance",
+            "inspect_export"
         ]
     );
     for tool in tools {

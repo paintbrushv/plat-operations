@@ -439,7 +439,7 @@ async fn tampered_rows_refuse_with_integrity_error() {
 }
 
 #[tokio::test]
-async fn describe_lists_twelve_functions_with_close_readiness_stateful() {
+async fn describe_lists_every_function_with_close_readiness_stateful() {
     let envelope = catalog::invoke(&Call {
         function: "describe".into(),
         version: None,
@@ -449,7 +449,7 @@ async fn describe_lists_twelve_functions_with_close_readiness_stateful() {
     })
     .await;
     let calculations = result(&envelope)["calculations"].as_array().unwrap();
-    assert_eq!(calculations.len(), 12);
+    assert_eq!(calculations.len(), 13);
     let entry = &calculations[9];
     assert_eq!(entry["name"], "close_readiness");
     assert_eq!(entry["version"], "1.0.0");

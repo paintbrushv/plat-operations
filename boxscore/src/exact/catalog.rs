@@ -19,8 +19,8 @@
 //! A consumer that pins `version` is refused rather than silently served a
 //! different one.
 use super::{
-    digest, error, ingest, readiness, snapshot_metrics, store, t12, trace, variance, ExactError,
-    Result, CONTRACT,
+    digest, error, ingest, inspect, readiness, snapshot_metrics, store, t12, trace, variance,
+    ExactError, Result, CONTRACT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -64,7 +64,7 @@ impl Calculation {
 pub const CATALOG: &[Calculation] = &[
     Calculation {
         name: "describe",
-        version: "1.3.0",
+        version: "1.4.0",
         summary: "List every calculation in this catalog with its version and JSON Schemas, and the source adapters the host can import through.",
         stateful: false,
         input_schema: schemas::empty_input,
@@ -80,7 +80,7 @@ pub const CATALOG: &[Calculation] = &[
     },
     Calculation {
         name: "import_period",
-        version: "1.1.0",
+        version: "1.2.0",
         summary: "Store a canonical period dataset as a new immutable revision; corrections require the current revision id and a reason. Instead of dataset, give profile (a registered source adapter, listed by describe) with files and options, and the server runs that adapter on the file contents, each file's full text sent as a JSON string.",
         stateful: true,
         input_schema: schemas::import_period_input,
@@ -157,6 +157,14 @@ pub const CATALOG: &[Calculation] = &[
         stateful: true,
         input_schema: schemas::get_provenance_input,
         output_schema: schemas::get_provenance_output,
+    },
+    Calculation {
+        name: "inspect_export",
+        version: "1.0.0",
+        summary: "Inspect an export before proposing a mapping: given the file's text it returns the shape (delimiter, header row, banner and footer rows, per-column kind, fill rate and distinct count) and up to five sample values per column, with free-text columns redacted by default. It returns shape and redacted samples, never the whole file.",
+        stateful: false,
+        input_schema: inspect::input_schema,
+        output_schema: inspect::output_schema,
     },
 ];
 
@@ -325,7 +333,7 @@ pub async fn invoke_hashed(call: &Call, input_sha256: String) -> Envelope {
         error_code: failure.as_ref().map(|e| e.code.to_string()),
         revision_id,
         report_id: result_id("report_id"),
-        input_json: trace::keep_inputs()
+        input_json: trace::retains_input(&call.function)
             .then(|| String::from_utf8_lossy(&canonical(&call.input)).into_owned()),
         started_at: computed_at.clone(),
         finished_at,
@@ -611,6 +619,10 @@ async fn execute(calc: &Calculation, call: &Call) -> Result<(&'static str, Value
             result["review_reasons"] = json!(review_reasons);
             Ok((status, result))
         }
+        "inspect_export" => {
+            let input: inspect::Input = parse(&call.input)?;
+            Ok(("calculated", inspect::run(input)?))
+        }
         "close_readiness" => readiness::execute(&call.input, database(calc, call)).await,
         "t12" => {
             let input: t12::Input = parse(&call.input)?;
@@ -875,7 +887,7 @@ pub mod schemas {
                 "profile": {"type": "string", "pattern": "^[a-z0-9._-]+/[1-9][0-9]*$",
                             "description": "Registered source adapter profile id (describe lists them), for example canonical.csv/1; give it with files and options instead of dataset"},
                 "files": {"type": "object", "additionalProperties": {"type": "string"},
-                          "description": "Adapter file name to that file's full UTF-8 text as a JSON string (a JSON file is sent as its text). The request body is capped at 2 MiB of JSON including escaping (a quote, backslash or newline in a file takes two bytes), so the files together must come in under 2 MiB once escaped"},
+                          "description": "Adapter file name to that file's full UTF-8 text as a JSON string (a JSON file is sent as its text). The request body is capped at 2 MiB of JSON including escaping (a quote, backslash or newline in a file takes two bytes), so the files together must come in under 2 MiB once escaped. A CSV may start with a UTF-8 byte-order mark (U+FEFF); it is ignored when parsing, and the recorded file hash still covers it"},
                 "options": {"type": "object", "additionalProperties": {"type": "string"},
                             "description": "Adapter option name to its value, as strings"},
                 "supersedes": {"type": "string", "description": "Current revision id when this import is a correction"},
@@ -1117,7 +1129,7 @@ pub mod schemas {
                         "revision_id": optional("string"),
                         "report_id": optional("string"),
                         "input_json": {"type": ["string", "null"],
-                                       "description": "Canonical input JSON; null unless the host set BOXSCORE_TRACE_INPUTS=1"},
+                                       "description": "Canonical input JSON; null unless the host set BOXSCORE_TRACE_INPUTS=1, and always null for inspect_export, whose input is a whole export"},
                         "started_at": {"type": "string"},
                         "finished_at": {"type": "string"}
                     }

@@ -52,7 +52,7 @@ docker pull "$IMAGE"
 > step 5.
 
 **1. Describe the catalog.** This is the default command. It prints one JSON
-envelope with `"status":"calculated"` listing the 12 calculations:
+envelope with `"status":"calculated"` listing the 13 calculations:
 
 ```bash
 docker run --rm $SAFE "$IMAGE"

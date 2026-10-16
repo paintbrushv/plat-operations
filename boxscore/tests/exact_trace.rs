@@ -174,7 +174,7 @@ fn trace_dir_appends_one_jsonl_line_per_call_without_a_database() {
     let record: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(record["trace_id"], envelope["trace_id"]);
     assert_eq!(record["function"], "describe");
-    assert_eq!(record["version"], "1.3.0");
+    assert_eq!(record["version"], "1.4.0");
     assert_eq!(record["caller"], "cli");
     assert_eq!(record["status"], "calculated");
     assert_eq!(record["input_sha256"], envelope["input_sha256"]);
@@ -235,7 +235,7 @@ async fn stateful_call_is_recorded_and_get_provenance_returns_the_revision_sourc
         .unwrap()
         .to_string();
     assert!(imported.citation.starts_with(&format!(
-        "boxscore import_period@1.1.0 · trace {}",
+        "boxscore import_period@1.2.0 · trace {}",
         imported.trace_id
     )));
     assert!(imported
@@ -250,7 +250,7 @@ async fn stateful_call_is_recorded_and_get_provenance_returns_the_revision_sourc
     let record = &result["trace"];
     assert_eq!(record["trace_id"], imported.trace_id.as_str());
     assert_eq!(record["function"], "import_period");
-    assert_eq!(record["version"], "1.1.0");
+    assert_eq!(record["version"], "1.2.0");
     assert_eq!(record["caller"], "test");
     assert_eq!(record["status"], "calculated");
     assert_eq!(record["input_sha256"], imported.input_sha256.as_str());
@@ -487,6 +487,40 @@ fn input_json_is_kept_only_when_the_host_opts_in_and_trace_matches_call() {
     assert_eq!(unknown["error"]["code"], "NOT_FOUND");
 }
 
+/// `inspect_export` takes a whole export, so its input is never retained, even
+/// when the host asks for raw inputs; other functions still keep theirs.
+#[tokio::test]
+async fn inspect_export_input_is_never_retained_even_with_trace_inputs_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_database(dir.path()).await;
+    let db_arg = db.to_str().unwrap();
+    let one = Path::new("1");
+    let input = json!({"name": "t.csv", "text": "Unit,Resident\nA1,Resident A\nA2,Resident B\n"});
+    let bytes = serde_json::to_vec(&input).unwrap();
+    let (code, inspected) = run(
+        &["call", "--database", db_arg, "--function", "inspect_export"],
+        &bytes,
+        &[("BOXSCORE_TRACE_INPUTS", one)],
+    );
+    assert_eq!(code, 0, "{inspected}");
+    let (_, traced) = run(
+        &[
+            "trace",
+            "--database",
+            db_arg,
+            "--id",
+            inspected["trace_id"].as_str().unwrap(),
+        ],
+        b"",
+        &[],
+    );
+    let trace = &traced["result"]["trace"];
+    assert_eq!(trace["function"], "inspect_export");
+    assert_eq!(trace["input_json"], Value::Null);
+    assert_eq!(trace["input_sha256"], digest(&bytes));
+    assert!(!traced.to_string().contains("Resident A"), "{traced}");
+}
+
 #[tokio::test]
 async fn invocations_are_append_only() {
     let dir = tempfile::tempdir().unwrap();
@@ -590,8 +624,8 @@ async fn describe_lists_twelve_functions_ending_with_get_provenance() {
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(calculations.len(), 12);
-    assert_eq!(catalog::CATALOG.len(), 12);
+    assert_eq!(calculations.len(), 13);
+    assert_eq!(catalog::CATALOG.len(), 13);
     let last = &calculations[11];
     assert_eq!(last["name"], "get_provenance");
     assert_eq!(last["version"], "1.0.0");

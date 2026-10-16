@@ -1,0 +1,4 @@
+{
+  "name": "synthetic-units.tsv",
+  "text": "Unit\tBedrooms\tMarket Rent\tMove In Date\nA101\t1\t1,250.00\t2025-06-01\nA102\t2\t1,550.00\t2025-08-15\nA103\t1\t1,250.00\t2026-01-01\nB201\t3\t1,950.00\t2024-11-01\nB202\t2\t1,575.00\t2026-03-15\n"
+}

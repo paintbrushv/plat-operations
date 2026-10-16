@@ -20,6 +20,11 @@
 //! same bytes, so the same files produce the same dataset and the same hashes,
 //! and the dataset reaches `store::import` the same way.
 //!
+//! A leading UTF-8 byte-order mark on a CSV is ignored when parsing but is part
+//! of the bytes every recorded file hash covers. The dataset-level
+//! `input_sha256` hashes the parsed dataset, so it is the same with or
+//! without the mark.
+//!
 //! Inline contents are bounded like files: each one at most 2 MiB (the bound
 //! [`read_bounded`] enforces) and all of them together at most 2 MiB. Every
 //! inline file is listed in the recorded `sources.files` as
@@ -378,10 +383,29 @@ pub fn read_bounded(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The UTF-8 byte-order mark some spreadsheet exports start a CSV with.
+pub const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+/// `bytes` without a leading UTF-8 byte-order mark. Parsing uses this; hashes
+/// and recorded byte counts never do, so provenance matches the file on disk.
+pub fn strip_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(&UTF8_BOM).unwrap_or(bytes)
+}
+
 /// Canonical GL rows: `account_code,account_name,category,amount` with
-/// decimal-string money.
+/// decimal-string money. A leading UTF-8 byte-order mark is ignored (the
+/// per-file hash the adapter records still covers it); a second one is
+/// refused, because the CSV reader would quietly drop it too and the file
+/// would pass with a mark in it that nothing reports.
 pub fn csv_lines(bytes: &[u8]) -> Result<Vec<Line>> {
-    csv::Reader::from_reader(bytes)
+    let body = strip_bom(bytes);
+    if body.starts_with(&UTF8_BOM) {
+        return Err(error(
+            "INVALID_INPUT",
+            "CSV starts with more than one byte-order mark (U+FEFF); remove the extra mark and send the file again",
+        ));
+    }
+    csv::Reader::from_reader(body)
         .deserialize()
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| {
@@ -397,7 +421,7 @@ const REFUSES_ALWAYS: [&str; 7] = [
     "UNKNOWN_FILE, UNKNOWN_OPTION, MISSING_FILE, MISSING_OPTION: a file or option this spec does not name, or a required one absent",
     "INPUT_LIMIT: any file over 2 MiB, inline files over 2 MiB in total, or more than 100000 GL rows",
     "INVALID_INPUT: money that is not a decimal string with at most two places, unknown fields, or malformed JSON",
-    "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, or an empty account code or category",
+    "INVALID_INPUT (at import): not USD, not positive_costs, a property outside 1-120 characters or with leading or trailing whitespace, a period that is not YYYY-MM, a unit count outside 1..=10000000, an empty account code or category, or a property, account code, account name or category containing a control character, an invisible format character (such as U+200B or U+FEFF) or whitespace other than a plain space (such as U+00A0)",
     "SNAPSHOT_MISMATCH (at import): a snapshot dated outside the period, or unit counts that do not sum to the unit count",
     "ACCOUNT_MAPPING_CONFLICT (at import): conflicting categories for one account code",
     "MONEY_OVERFLOW (at import): any total outside the checked signed-cent range",

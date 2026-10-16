@@ -304,7 +304,16 @@ async fn scan(pool: &SqlitePool) -> Result<(Vec<Dataset>, Vec<Value>, BTreeMap<S
             budgets,
             snapshot,
         };
-        data.validate()?;
+        // Legacy rows are validated as stored data: a byte-order mark or
+        // no-break space already in the legacy database must not block a
+        // reviewed copy. The plan lists it, and `review_period` flags the
+        // copied revision with the review reason `invisible_characters`.
+        data.validate_stored()?;
+        if data.has_hidden_characters() {
+            differences.push(json!({"kind":"invisible_characters","property_id":data.property,"period":data.period,
+                "review_reason":"invisible_characters",
+                "message":"A property, account code, account name or category holds an invisible character or a non-space whitespace character; it is copied unchanged and the revision is flagged for review"}));
+        }
         datasets.push(data);
     }
     let actual_count: usize = datasets.iter().map(|d| d.actuals.len()).sum();
@@ -410,11 +419,9 @@ pub async fn migrate(source: &Path, destination: &Path, review: &Review) -> Resu
     let mut revisions = Vec::new();
     for data in datasets {
         revisions.push(
-            store::import(
+            store::import_legacy(
                 &target,
                 &data,
-                None,
-                None,
                 &json!({"legacy_database_sha256":review.source_sha256,"migration_review":review}),
             )
             .await?,

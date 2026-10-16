@@ -68,7 +68,33 @@ fn snapshot_mismatch() -> super::ExactError {
 }
 
 impl Dataset {
+    /// Everything a new import must satisfy, including the refusal of control,
+    /// invisible format and non-space whitespace characters in the property
+    /// and account fields.
     pub fn validate(&self) -> Result<()> {
+        self.check(true)
+    }
+
+    /// [`Self::validate`] for a revision that is already stored: the same
+    /// rules except the character refusal, which applies to new imports only.
+    /// A revision written before that rule stays reviewable; `review_period`
+    /// flags it with the review reason `invisible_characters` instead.
+    pub fn validate_stored(&self) -> Result<()> {
+        self.check(false)
+    }
+
+    /// Whether the property, or any account code, name or category, holds a
+    /// character the import refuses (see [`is_hidden_character`]).
+    pub fn has_hidden_characters(&self) -> bool {
+        self.property.chars().any(is_hidden_character)
+            || self.actuals.iter().chain(&self.budgets).any(|row| {
+                [&row.account_code, &row.account_name, &row.category]
+                    .iter()
+                    .any(|value| value.chars().any(is_hidden_character))
+            })
+    }
+
+    fn check(&self, characters: bool) -> Result<()> {
         if self.property.trim().is_empty()
             || self.property.len() > 120
             || self.currency != "USD"
@@ -97,9 +123,100 @@ impl Dataset {
                 return Err(snapshot_mismatch());
             }
         }
+        if characters {
+            // The property keys the revision chain: a hidden character in it
+            // would start a second chain that looks identical to the first.
+            if let Some(c) = self.property.chars().find(|c| is_hidden_character(*c)) {
+                return Err(error(
+                    "INVALID_INPUT",
+                    format!(
+                        "property contains the invisible character U+{:04X}; remove it from the export before import",
+                        c as u32
+                    ),
+                ));
+            }
+            refuse_hidden_characters("actuals", &self.actuals)?;
+            refuse_hidden_characters("budgets", &self.budgets)?;
+        }
         variance::compute(&self.actuals, &self.budgets)?;
         Ok(())
     }
+}
+
+/// Unicode format characters (general category Cf), the line and paragraph
+/// separators U+2028 and U+2029, and the invisible fillers and variation
+/// selectors that render as nothing (combining grapheme joiner, Mongolian free
+/// variation selectors, variation selectors 1-16, Hangul fillers, braille
+/// blank), as inclusive code point ranges. `char::is_control` covers category
+/// Cc only and std has no Cf predicate, so the list is explicit. These
+/// characters are invisible in a spreadsheet, so two accounts can look
+/// identical and not compare equal (a byte-order mark pasted into a category is
+/// the usual way in). Whitespace other than U+0020 is refused separately, in
+/// [`is_hidden_character`].
+const FORMAT_RANGES: [(u32, u32); 27] = [
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x115F, 0x1160),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x2028, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0x2800, 0x2800),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+];
+
+/// Whether `c` is a control character, an invisible format character, or any
+/// whitespace other than the plain space U+0020 (a no-break space, an en or em
+/// space, an ideographic space and the line separators look like a space but
+/// do not compare equal to one).
+pub fn is_hidden_character(c: char) -> bool {
+    let code = c as u32;
+    c.is_control()
+        || (c.is_whitespace() && c != ' ')
+        || FORMAT_RANGES
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&code))
+}
+
+/// Refuse a control or format character in an account code, name or category,
+/// naming the list, row index (0-based), field and code point.
+fn refuse_hidden_characters(kind: &str, rows: &[Line]) -> Result<()> {
+    for (index, row) in rows.iter().enumerate() {
+        for (field, value) in [
+            ("account_code", &row.account_code),
+            ("account_name", &row.account_name),
+            ("category", &row.category),
+        ] {
+            if let Some(c) = value.chars().find(|c| is_hidden_character(*c)) {
+                return Err(error(
+                    "INVALID_INPUT",
+                    format!(
+                        "{kind}[{index}].{field} contains the invisible character U+{:04X}; remove it from the export before import",
+                        c as u32
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 const DDL: &str = r#"
@@ -233,6 +350,25 @@ pub async fn import(
     sources: &Value,
 ) -> Result<String> {
     data.validate()?;
+    import_validated(pool, data, parent, reason, sources).await
+}
+
+/// [`import`] for rows that already exist in a legacy database: every rule
+/// except the character refusal (see [`Dataset::validate_stored`]), so a
+/// legacy byte-order mark or no-break space does not block a reviewed
+/// migration. `review_period` flags the stored revision `invisible_characters`.
+pub async fn import_legacy(pool: &SqlitePool, data: &Dataset, sources: &Value) -> Result<String> {
+    data.validate_stored()?;
+    import_validated(pool, data, None, None, sources).await
+}
+
+async fn import_validated(
+    pool: &SqlitePool,
+    data: &Dataset,
+    parent: Option<&str>,
+    reason: Option<&str>,
+    sources: &Value,
+) -> Result<String> {
     let input_hash = digest(&serde_json::to_vec(data)?);
     let mut tx = pool.begin().await?;
     let latest = sqlx::query("SELECT id,revision,input_sha256 FROM exact_revisions WHERE property=? AND period=? ORDER BY revision DESC LIMIT 1")
@@ -429,7 +565,7 @@ pub async fn review(pool: &SqlitePool, id: &str) -> Result<Value> {
 
 async fn review_on(conn: &mut SqliteConnection, id: &str) -> Result<Value> {
     let data = load_verified_on(conn, id).await?;
-    data.validate()?;
+    data.validate_stored()?;
     let row = sqlx::query("SELECT * FROM exact_revisions WHERE id=?")
         .bind(id)
         .fetch_one(&mut *conn)
@@ -482,6 +618,11 @@ async fn review_on(conn: &mut SqliteConnection, id: &str) -> Result<Value> {
         .any(|l| l.category.trim().eq_ignore_ascii_case("unmapped"))
     {
         result.review_reasons.push("unmapped_accounts".into());
+    }
+    // A revision stored before new imports refused these characters is still
+    // reviewed, and the reason says it holds some.
+    if data.has_hidden_characters() {
+        result.review_reasons.push("invisible_characters".into());
     }
     let parent: Option<String> = row.get("parent_id");
     let mut changes = BTreeMap::new();

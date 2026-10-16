@@ -771,7 +771,7 @@ async fn inline_import_matches_import_with_on_the_same_files() {
     let inline_db = f.database("inline.sqlite");
     let envelope = call_import(&inline_db, inline_quickstart_input()).await;
     assert_eq!(envelope.status, "calculated", "{:?}", envelope.error);
-    assert_eq!(envelope.version, Some("1.1.0"));
+    assert_eq!(envelope.version, Some("1.2.0"));
     let from_inline = envelope.result.unwrap()["revision_id"]
         .as_str()
         .unwrap()
@@ -1171,4 +1171,95 @@ fn inline_contents_win_over_paths_and_are_bounded() {
     let (code, message) = refusal(&total, CANONICAL_CSV);
     assert_eq!(code, "INPUT_LIMIT");
     assert!(message.contains("total"), "{message}");
+}
+
+// (h) UPL-102: a leading UTF-8 byte-order mark is ignored when parsing and
+// still covered by the recorded per-file hash.
+#[tokio::test]
+async fn byte_order_mark_is_ignored_by_the_parser_but_kept_in_the_file_hash() {
+    let f = Fixture::new();
+    let plain_text = quickstart_text("actuals.csv");
+    let bom_text = format!("\u{FEFF}{plain_text}");
+    assert_eq!(&bom_text.as_bytes()[..3], &ingest::UTF8_BOM);
+
+    let plain_db = f.database("plain.sqlite");
+    let bom_db = f.database("bom.sqlite");
+    let plain = call_import(&plain_db, inline_quickstart_input()).await;
+    let mut with_bom = inline_quickstart_input();
+    with_bom["files"]["actuals"] = json!(bom_text);
+    let bom = call_import(&bom_db, with_bom).await;
+    assert_eq!(plain.status, "calculated", "{:?}", plain.error);
+    assert_eq!(bom.status, "calculated", "{:?}", bom.error);
+
+    let a = review(
+        &plain_db,
+        plain.result.as_ref().unwrap()["revision_id"]
+            .as_str()
+            .unwrap(),
+    );
+    let b = review(
+        &bom_db,
+        bom.result.as_ref().unwrap()["revision_id"]
+            .as_str()
+            .unwrap(),
+    );
+    // The dataset is the same, so its hash is the same with or without the mark.
+    assert_eq!(a["input_sha256"], b["input_sha256"]);
+    assert_eq!(a["variance"], b["variance"]);
+    // The file hashes are of the bytes as received, so they differ, and the
+    // BOM'd one is the hash of the file as it sits on disk.
+    assert_eq!(
+        a["sources"]["actuals_sha256"],
+        digest(plain_text.as_bytes())
+    );
+    assert_eq!(b["sources"]["actuals_sha256"], digest(bom_text.as_bytes()));
+    assert_ne!(
+        a["sources"]["actuals_sha256"],
+        b["sources"]["actuals_sha256"]
+    );
+    assert_eq!(
+        a["sources"]["budgets_sha256"],
+        b["sources"]["budgets_sha256"]
+    );
+    let listed = b["sources"]["files"].as_array().unwrap();
+    let actuals = listed
+        .iter()
+        .find(|file| file["name"] == "actuals")
+        .unwrap();
+    assert_eq!(actuals["bytes"], bom_text.len());
+    assert_eq!(actuals["sha256"], digest(bom_text.as_bytes()));
+}
+
+#[test]
+fn csv_lines_ignores_a_leading_byte_order_mark() {
+    let with_bom = [&ingest::UTF8_BOM[..], ACTUALS.as_bytes()].concat();
+    let plain = ingest::csv_lines(ACTUALS.as_bytes()).unwrap();
+    let marked = ingest::csv_lines(&with_bom).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&plain).unwrap(),
+        serde_json::to_vec(&marked).unwrap()
+    );
+    // strip_bom removes exactly one leading mark and nothing else.
+    assert_eq!(ingest::strip_bom(&with_bom), ACTUALS.as_bytes());
+    assert_eq!(ingest::strip_bom(ACTUALS.as_bytes()), ACTUALS.as_bytes());
+    let doubled = [&ingest::UTF8_BOM[..], &with_bom[..]].concat();
+    assert_eq!(ingest::strip_bom(&doubled), &with_bom[..]);
+}
+
+// csv-core drops one leading mark by itself, so after `strip_bom` a second mark
+// would pass unreported; the adapter refuses it instead.
+#[test]
+fn csv_lines_refuses_a_second_leading_byte_order_mark() {
+    let doubled = [
+        &ingest::UTF8_BOM[..],
+        &ingest::UTF8_BOM[..],
+        ACTUALS.as_bytes(),
+    ]
+    .concat();
+    let error = ingest::csv_lines(&doubled).unwrap_err();
+    assert_eq!(error.code, "INVALID_INPUT");
+    assert!(error.message.contains("U+FEFF"), "{}", error.message);
+    // One mark, or a mark that is not at the start, is the existing behavior.
+    let one = [&ingest::UTF8_BOM[..], ACTUALS.as_bytes()].concat();
+    assert!(ingest::csv_lines(&one).is_ok());
 }
