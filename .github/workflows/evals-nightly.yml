@@ -1,0 +1,172 @@
+name: evals-nightly
+
+# The live agent grounding evals (evals/README.md): a real model, the real
+# `boxscore-exact mcp` server, synthetic data. Nightly and on demand, never on
+# pull requests (a run costs money). The repository owner sets the
+# ANTHROPIC_API_KEY secret; without it the workflow says so in the step
+# summary and succeeds without calling the model.
+#
+# When the thresholds in evals/thresholds.json pass, the run's trend line is
+# proposed as a pull request that appends it to evals/trend.jsonl (branch
+# evals/trend, reused). A failing run fails the workflow and records nothing.
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model id'
+        type: string
+        default: claude-sonnet-5-5
+      scenario:
+        description: 'Only these scenario ids, comma separated (empty runs all)'
+        type: string
+        default: ''
+      max_total_tokens:
+        description: 'Stop the run past this many input + output tokens'
+        type: string
+        default: '400000'
+
+# One run at a time: the trend branch is shared.
+concurrency:
+  group: evals-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  evals:
+    name: live grounding evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Only this job writes: the trend branch and its pull request.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # `secrets` cannot appear in an `if:`, so this step reads it into an
+      # environment variable and only reports whether it is empty. The value
+      # is never printed and never passed as an argument.
+      - name: Check for the API key
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "live=false" >> "$GITHUB_OUTPUT"
+            echo "live evals skipped: ANTHROPIC_API_KEY secret is not set" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "live=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.key.outputs.live == 'true'
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master (toolchain: stable below)
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        if: steps.key.outputs.live == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: boxscore
+
+      - name: Build the engine (release)
+        if: steps.key.outputs.live == 'true'
+        working-directory: boxscore
+        run: cargo build --release --locked
+
+      - name: Set up Python
+        if: steps.key.outputs.live == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the eval requirements
+        if: steps.key.outputs.live == 'true'
+        run: python3 -m pip install -r evals/requirements.txt
+
+      # Inputs reach the shell through the environment, not through the
+      # script text, and are checked before use. A scheduled run has no
+      # inputs, so the defaults apply.
+      - name: Run the evals
+        id: run
+        if: steps.key.outputs.live == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_MODEL: ${{ inputs.model || 'claude-sonnet-5-5' }}
+          EVAL_SCENARIOS: ${{ inputs.scenario }}
+          EVAL_MAX_TOTAL_TOKENS: ${{ inputs.max_total_tokens || '400000' }}
+        run: |
+          case "$EVAL_MODEL" in *[!A-Za-z0-9._-]*|'') echo "invalid model id" >&2; exit 2 ;; esac
+          case "$EVAL_MAX_TOTAL_TOKENS" in *[!0-9]*|'') echo "max_total_tokens must be a whole number" >&2; exit 2 ;; esac
+          args=(--model "$EVAL_MODEL" --max-total-tokens "$EVAL_MAX_TOTAL_TOKENS" --out evals/out)
+          if [ -n "$EVAL_SCENARIOS" ]; then
+            IFS=',' read -r -a ids <<< "$EVAL_SCENARIOS"
+            for id in "${ids[@]}"; do
+              id="${id// /}"
+              case "$id" in *[!A-Za-z0-9._-]*|'') echo "invalid scenario id" >&2; exit 2 ;; esac
+              args+=(--scenario "$id")
+            done
+          fi
+          # Exit 1 means a scenario errored: gate.py reports that. Anything
+          # higher (usage error, no SDK) stops here.
+          rc=0
+          python3 evals/run.py "${args[@]}" || rc=$?
+          if [ "$rc" -gt 1 ]; then exit "$rc"; fi
+          echo "dir=$(ls -1d evals/out/*/ | sort | tail -n 1 | sed 's:/$::')" >> "$GITHUB_OUTPUT"
+
+      # Scores the transcripts, prints the summary here and in the step
+      # summary, writes the trend line to a file outside the checkout, and
+      # fails the job when a threshold is missed.
+      - name: Gate on the thresholds
+        id: gate
+        if: steps.key.outputs.live == 'true'
+        env:
+          RUN_DIR: ${{ steps.run.outputs.dir }}
+        run: python3 evals/gate.py "$RUN_DIR" --trend "$RUNNER_TEMP/trend-line.jsonl"
+
+      - name: Upload the transcripts
+        if: always() && steps.key.outputs.live == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evals-out
+          path: evals/out/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Passing runs only. The branch is rebuilt from main each night so it
+      # never conflicts; trend lines already on it and not yet merged are kept.
+      # The pull request is created once and updated by the push after that.
+      - name: Propose the trend line
+        if: steps.gate.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+          git switch --detach origin/main
+          pending="$RUNNER_TEMP/pending.jsonl"
+          : > "$pending"
+          if git fetch --no-tags origin evals/trend 2>/dev/null; then
+            git show FETCH_HEAD:evals/trend.jsonl | grep -vxFf evals/trend.jsonl >> "$pending" || true
+          fi
+          git switch -C evals/trend
+          cat "$pending" "$RUNNER_TEMP/trend-line.jsonl" >> evals/trend.jsonl
+          git add evals/trend.jsonl
+          git commit -s -m "chore(evals): trend line for $(date -u +%F)"
+          git push --force origin evals/trend
+          if [ "$(gh pr list --head evals/trend --base main --state open --json number --jq length)" = "0" ]; then
+            gh pr create --base main --head evals/trend \
+              --title "chore(evals): nightly trend lines" \
+              --body "Appends the passing nightly grounding eval run(s) to evals/trend.jsonl. Opened by the evals-nightly workflow; see evals/README.md."
+          fi
