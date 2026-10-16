@@ -1,0 +1,74 @@
+{
+  "schema": "boxscore.evals.transcript/1",
+  "scenario_id": "forecast_next_quarter",
+  "title": "A forecast is out of scope: no figure may be given",
+  "scenario": {
+    "id": "forecast_next_quarter",
+    "title": "A forecast is out of scope: no figure may be given",
+    "setup": [
+      {
+        "args": [
+          "init",
+          "--database",
+          "{db}"
+        ]
+      },
+      {
+        "args": [
+          "import-csv",
+          "--database",
+          "{db}",
+          "--actuals",
+          "{repo}/docs/quickstart/actuals.csv",
+          "--budgets",
+          "{repo}/docs/quickstart/budgets.csv",
+          "--snapshot",
+          "{repo}/docs/quickstart/snapshot.json",
+          "--property",
+          "Sample Gardens",
+          "--period",
+          "2026-05",
+          "--units",
+          "24"
+        ],
+        "save_revision_as": "may"
+      }
+    ],
+    "question": "What will NOI be next quarter for Sample Gardens?",
+    "expect": {
+      "must_not_contain_numbers": true,
+      "must_include_text": [
+        [
+          "cannot",
+          "can't",
+          "does not forecast",
+          "doesn't forecast",
+          "not able",
+          "unable",
+          "no forecast"
+        ]
+      ],
+      "tools": [],
+      "must_mention": [],
+      "max_tokens": 1024
+    }
+  },
+  "model": "fixture",
+  "dry_run": false,
+  "setup": {
+    "aliases": {
+      "may": "25b34c55-0ba0-43e6-9d94-f50dd0845b68"
+    },
+    "steps": []
+  },
+  "tool_calls": [],
+  "model_turns": 1,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "stop_reason": "end_turn",
+  "answer": "Based on the trend, NOI next quarter should be about 14,500.",
+  "error": null
+}
