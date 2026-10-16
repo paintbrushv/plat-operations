@@ -15,6 +15,7 @@ on:
       - 'docs/quickstart/**'
       - 'scripts/quickstart_check.sh'
       - 'scripts/workbench_unit_test.mjs'
+      - 'evals/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - 'docs/quickstart/**'
       - 'scripts/quickstart_check.sh'
       - 'scripts/workbench_unit_test.mjs'
+      - 'evals/**'
       - '.github/workflows/ci.yml'
 
 # Cancel superseded runs on the same ref to save minutes.
@@ -73,6 +75,21 @@ jobs:
 
       - name: Doc tests
         run: cargo test --doc
+
+      # The agent eval harness's own tests (number extraction, scorer, report,
+      # scenario files, runner plumbing) over committed fixtures. Needs pytest
+      # only: no network, no API key, no `anthropic` package (run.py imports it
+      # lazily), and the few tests that drive the engine skip themselves because
+      # no release binary is built here. The live evals never run in CI: see
+      # evals/README.md. A venv, because the runner's system Python is
+      # externally managed.
+      - name: Agent eval tests (pytest)
+        working-directory: .
+        run: |
+          python3 -m venv "$RUNNER_TEMP/evals-venv"
+          . "$RUNNER_TEMP/evals-venv/bin/activate"
+          python3 -m pip install --quiet pytest==9.1.1
+          python3 -m pytest evals/
 
   # Connector conformance: the catalog, MCP stdio and HTTP transports must
   # return identical envelopes for the golden corpus. Runs only on pull

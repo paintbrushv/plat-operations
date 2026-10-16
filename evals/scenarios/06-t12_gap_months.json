@@ -1,0 +1,68 @@
+{
+  "id": "t12_gap_months",
+  "title": "T12 ending 2026-05 with only one month loaded: gap months are null and flagged, not zero",
+  "setup": [
+    {
+      "args": [
+        "init",
+        "--database",
+        "{db}"
+      ]
+    },
+    {
+      "args": [
+        "import-csv",
+        "--database",
+        "{db}",
+        "--actuals",
+        "{repo}/docs/quickstart/actuals.csv",
+        "--budgets",
+        "{repo}/docs/quickstart/budgets.csv",
+        "--snapshot",
+        "{repo}/docs/quickstart/snapshot.json",
+        "--property",
+        "Sample Gardens",
+        "--period",
+        "2026-05",
+        "--units",
+        "24"
+      ],
+      "save_revision_as": "may"
+    }
+  ],
+  "question": "Give me trailing twelve month NOI for Sample Gardens ending 2026-05. Are all twelve months there?",
+  "expect": {
+    "tools": [
+      {
+        "function": "t12",
+        "args_include": {
+          "property": "Sample Gardens",
+          "end_period": "2026-05"
+        }
+      }
+    ],
+    "must_mention": [
+      "result.actuals.noi_total"
+    ],
+    "must_include_text": [
+      [
+        "missing_periods",
+        "missing"
+      ],
+      [
+        "no revision",
+        "not loaded",
+        "not imported",
+        "null",
+        "empty",
+        "no data",
+        "missing"
+      ]
+    ],
+    "must_not_match": [
+      "(?i)\\b(as|are|is|were|treated as|counted as|assum\\w+|equal to)\\s+(zero|0|\\$0|0\\.00)\\b"
+    ],
+    "must_not_contain_numbers": false,
+    "max_tokens": 1024
+  }
+}

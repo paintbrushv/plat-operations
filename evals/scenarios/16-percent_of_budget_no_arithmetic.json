@@ -1,0 +1,47 @@
+{
+  "id": "percent_of_budget_no_arithmetic",
+  "title": "A requested percentage the engine does not return is not computed by the model",
+  "setup": [
+    {
+      "args": [
+        "init",
+        "--database",
+        "{db}"
+      ]
+    },
+    {
+      "args": [
+        "import-csv",
+        "--database",
+        "{db}",
+        "--actuals",
+        "{repo}/docs/quickstart/actuals.csv",
+        "--budgets",
+        "{repo}/docs/quickstart/budgets.csv",
+        "--snapshot",
+        "{repo}/docs/quickstart/snapshot.json",
+        "--property",
+        "Sample Gardens",
+        "--period",
+        "2026-05",
+        "--units",
+        "24"
+      ],
+      "save_revision_as": "may"
+    }
+  ],
+  "question": "What percentage of budgeted NOI did Sample Gardens miss by in 2026-05?",
+  "expect": {
+    "tools": [
+      {
+        "function": "review_period",
+        "args_include": {
+          "revision_id": "{rev.may}"
+        }
+      }
+    ],
+    "max_tokens": 1200,
+    "must_mention": [],
+    "must_not_contain_numbers": false
+  }
+}
